@@ -8,13 +8,11 @@ import com.example.WallEApplication
 import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.ModeFilterSettings
-import com.example.data.model.Wallpaper
 import com.example.worker.WallpaperIntervalWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -24,8 +22,10 @@ data class WallEUIState(
     val currentWallpaper: CurrentWallpaperInfo = CurrentWallpaperInfo(),
     val isCurrentFavorite: Boolean = false,
     val isLoading: Boolean = false,
-    val sfwTags: Set<String> = emptySet(),
-    val nsfwTags: Set<String> = emptySet(),
+    val savedSfwTags: Set<String> = emptySet(),
+    val activeSfwTags: Set<String> = emptySet(),
+    val savedNsfwTags: Set<String> = emptySet(),
+    val activeNsfwTags: Set<String> = emptySet(),
     val nsfwPurity: String = "both",
     val sfwCategory: String = "all",
     val nsfwCategory: String = "people",
@@ -33,17 +33,7 @@ data class WallEUIState(
     val nsfwFilters: ModeFilterSettings = ModeFilterSettings(),
     val apiKey: String = "",
     val intervalMinutes: Int = 60,
-    val localFolderUri: String = "",
-    val editingCropWallpaper: WallpaperCropTarget? = null
-)
-
-data class WallpaperCropTarget(
-    val id: String,
-    val url: String,
-    val initialOffset: Float,
-    val purity: String,
-    val category: String,
-    val isFromFavorites: Boolean
+    val localFolderUri: String = ""
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -69,10 +59,16 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             repository.currentWallpaper.collect { current -> _uiState.value = _uiState.value.copy(currentWallpaper = current) }
         }
         viewModelScope.launch {
-            repository.sfwTags.collect { tags -> _uiState.value = _uiState.value.copy(sfwTags = tags) }
+            repository.savedSfwTags.collect { tags -> _uiState.value = _uiState.value.copy(savedSfwTags = tags) }
         }
         viewModelScope.launch {
-            repository.nsfwTags.collect { tags -> _uiState.value = _uiState.value.copy(nsfwTags = tags) }
+            repository.activeSfwTags.collect { tags -> _uiState.value = _uiState.value.copy(activeSfwTags = tags) }
+        }
+        viewModelScope.launch {
+            repository.savedNsfwTags.collect { tags -> _uiState.value = _uiState.value.copy(savedNsfwTags = tags) }
+        }
+        viewModelScope.launch {
+            repository.activeNsfwTags.collect { tags -> _uiState.value = _uiState.value.copy(activeNsfwTags = tags) }
         }
         viewModelScope.launch {
             repository.nsfwPurity.collect { purity -> _uiState.value = _uiState.value.copy(nsfwPurity = purity) }
@@ -113,7 +109,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         val nextMode = !_uiState.value.isNsfwMode
         viewModelScope.launch {
             preferences.setNsfwMode(nextMode)
-            // Changing mode automatically fetches/applies matching wallpaper
             fetchNextWallpaper()
         }
     }
@@ -130,34 +125,74 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val isNsfw = _uiState.value.isNsfwMode
             if (isNsfw) {
-                val current = _uiState.value.nsfwTags.toMutableSet()
-                if (current.contains(tag)) current.remove(tag) else current.add(tag)
-                preferences.setNsfwTags(current)
+                val active = _uiState.value.activeNsfwTags.toMutableSet()
+                if (active.contains(tag)) active.remove(tag) else active.add(tag)
+                preferences.setActiveNsfwTags(active)
             } else {
-                val current = _uiState.value.sfwTags.toMutableSet()
-                if (current.contains(tag)) current.remove(tag) else current.add(tag)
-                preferences.setSfwTags(current)
+                val active = _uiState.value.activeSfwTags.toMutableSet()
+                if (active.contains(tag)) active.remove(tag) else active.add(tag)
+                preferences.setActiveSfwTags(active)
             }
-            // "When the tags are activated or deactivated, a new photo is fetched and applied in real time from the API"
             fetchNextWallpaper()
         }
     }
 
-    fun addCustomTag(tag: String) {
-        if (tag.isBlank()) return
+    fun addTag(tag: String) {
         val cleanTag = tag.trim().lowercase()
+        if (cleanTag.isBlank()) return
         viewModelScope.launch {
             val isNsfw = _uiState.value.isNsfwMode
             if (isNsfw) {
-                val current = _uiState.value.nsfwTags.toMutableSet()
-                current.add(cleanTag)
-                preferences.setNsfwTags(current)
+                val saved = _uiState.value.savedNsfwTags.toMutableSet().apply { add(cleanTag) }
+                val active = _uiState.value.activeNsfwTags.toMutableSet().apply { add(cleanTag) }
+                preferences.setSavedNsfwTags(saved)
+                preferences.setActiveNsfwTags(active)
             } else {
-                val current = _uiState.value.sfwTags.toMutableSet()
-                current.add(cleanTag)
-                preferences.setSfwTags(current)
+                val saved = _uiState.value.savedSfwTags.toMutableSet().apply { add(cleanTag) }
+                val active = _uiState.value.activeSfwTags.toMutableSet().apply { add(cleanTag) }
+                preferences.setSavedSfwTags(saved)
+                preferences.setActiveSfwTags(active)
             }
             fetchNextWallpaper()
+        }
+    }
+
+    fun removeTag(tag: String) {
+        viewModelScope.launch {
+            val isNsfw = _uiState.value.isNsfwMode
+            var wasActive = false
+            if (isNsfw) {
+                val saved = _uiState.value.savedNsfwTags.toMutableSet().apply { remove(tag) }
+                val active = _uiState.value.activeNsfwTags.toMutableSet().apply { wasActive = remove(tag) }
+                preferences.setSavedNsfwTags(saved)
+                preferences.setActiveNsfwTags(active)
+            } else {
+                val saved = _uiState.value.savedSfwTags.toMutableSet().apply { remove(tag) }
+                val active = _uiState.value.activeSfwTags.toMutableSet().apply { wasActive = remove(tag) }
+                preferences.setSavedSfwTags(saved)
+                preferences.setActiveSfwTags(active)
+            }
+            if (wasActive) {
+                fetchNextWallpaper()
+            }
+        }
+    }
+
+    fun updateDragOffset(offset: Float) {
+        val clamped = offset.coerceIn(0f, 1f)
+        val current = _uiState.value.currentWallpaper
+        _uiState.value = _uiState.value.copy(
+            currentWallpaper = current.copy(horizontalOffset = clamped)
+        )
+    }
+
+    fun commitDragOffset(offset: Float) {
+        val clamped = offset.coerceIn(0f, 1f)
+        val current = _uiState.value.currentWallpaper
+        if (current.id.isBlank()) return
+        viewModelScope.launch {
+            repository.updateCropOffset(current.id, clamped)
+            repository.notifyWallpaperChanged()
         }
     }
 
@@ -197,46 +232,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteFavorite(id: String) {
         viewModelScope.launch {
             repository.deleteFavorite(id)
-        }
-    }
-
-    fun openCropForCurrent() {
-        val current = _uiState.value.currentWallpaper
-        if (current.id.isBlank()) return
-        _uiState.value = _uiState.value.copy(
-            editingCropWallpaper = WallpaperCropTarget(
-                id = current.id,
-                url = current.url,
-                initialOffset = current.horizontalOffset,
-                purity = current.purity,
-                category = current.category,
-                isFromFavorites = _uiState.value.isCurrentFavorite
-            )
-        )
-    }
-
-    fun openCropForFavorite(fav: FavoriteWallpaper) {
-        _uiState.value = _uiState.value.copy(
-            editingCropWallpaper = WallpaperCropTarget(
-                id = fav.id,
-                url = fav.url,
-                initialOffset = fav.horizontalOffset,
-                purity = fav.purity,
-                category = fav.category,
-                isFromFavorites = true
-            )
-        )
-    }
-
-    fun closeCrop() {
-        _uiState.value = _uiState.value.copy(editingCropWallpaper = null)
-    }
-
-    fun saveCropOffset(id: String, offset: Float) {
-        viewModelScope.launch {
-            repository.updateCropOffset(id, offset)
-            repository.notifyWallpaperChanged()
-            closeCrop()
         }
     }
 

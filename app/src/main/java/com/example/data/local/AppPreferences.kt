@@ -36,8 +36,10 @@ class AppPreferences(private val context: Context) {
         val KEY_NSFW_CONTRAST = floatPreferencesKey("nsfw_contrast")
 
         // Tags
-        val KEY_SFW_TAGS = stringSetPreferencesKey("sfw_tags")
-        val KEY_NSFW_TAGS = stringSetPreferencesKey("nsfw_tags")
+        val KEY_SAVED_SFW_TAGS = stringSetPreferencesKey("saved_sfw_tags")
+        val KEY_ACTIVE_SFW_TAGS = stringSetPreferencesKey("active_sfw_tags")
+        val KEY_SAVED_NSFW_TAGS = stringSetPreferencesKey("saved_nsfw_tags")
+        val KEY_ACTIVE_NSFW_TAGS = stringSetPreferencesKey("active_nsfw_tags")
 
         // NSFW Purity: "both", "sketchy", "nsfw"
         val KEY_NSFW_PURITY = stringPreferencesKey("nsfw_purity")
@@ -86,13 +88,24 @@ class AppPreferences(private val context: Context) {
         )
     }
 
-    val sfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_SFW_TAGS] ?: setOf("nature", "cyberpunk", "minimalism")
+    val savedSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
+        it[KEY_SAVED_SFW_TAGS] ?: setOf("nature", "landscape", "cyberpunk", "minimalism", "space", "city", "digital art", "neon")
     }
 
-    val nsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_NSFW_TAGS] ?: setOf("portrait", "cosplay", "model")
+    val activeSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
+        it[KEY_ACTIVE_SFW_TAGS] ?: setOf("nature", "cyberpunk", "minimalism")
     }
+
+    val savedNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
+        it[KEY_SAVED_NSFW_TAGS] ?: setOf("portrait", "cosplay", "boudoir", "bikini", "sensual", "model", "aesthetic", "glamour")
+    }
+
+    val activeNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
+        it[KEY_ACTIVE_NSFW_TAGS] ?: setOf("portrait", "cosplay", "model")
+    }
+
+    val sfwTagsFlow: Flow<Set<String>> get() = activeSfwTagsFlow
+    val nsfwTagsFlow: Flow<Set<String>> get() = activeNsfwTagsFlow
 
     val nsfwPurityFlow: Flow<String> = context.dataStore.data.map {
         it[KEY_NSFW_PURITY] ?: "both" // "both", "sketchy", "nsfw"
@@ -151,13 +164,24 @@ class AppPreferences(private val context: Context) {
         }
     }
 
-    suspend fun setSfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_SFW_TAGS] = tags }
+    suspend fun setSavedSfwTags(tags: Set<String>) {
+        context.dataStore.edit { it[KEY_SAVED_SFW_TAGS] = tags }
     }
 
-    suspend fun setNsfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_NSFW_TAGS] = tags }
+    suspend fun setActiveSfwTags(tags: Set<String>) {
+        context.dataStore.edit { it[KEY_ACTIVE_SFW_TAGS] = tags }
     }
+
+    suspend fun setSavedNsfwTags(tags: Set<String>) {
+        context.dataStore.edit { it[KEY_SAVED_NSFW_TAGS] = tags }
+    }
+
+    suspend fun setActiveNsfwTags(tags: Set<String>) {
+        context.dataStore.edit { it[KEY_ACTIVE_NSFW_TAGS] = tags }
+    }
+
+    suspend fun setSfwTags(tags: Set<String>) = setActiveSfwTags(tags)
+    suspend fun setNsfwTags(tags: Set<String>) = setActiveNsfwTags(tags)
 
     suspend fun setNsfwPurity(purity: String) {
         context.dataStore.edit { it[KEY_NSFW_PURITY] = purity }

@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,7 +61,6 @@ fun FavoritesScreen(
         ) { fav ->
             FavoriteCard(
                 favorite = fav,
-                onCropClick = { viewModel.openCropForFavorite(fav) },
                 onDeleteClick = { viewModel.deleteFavorite(fav.id) },
                 onItemClick = { viewModel.applyFavoriteAsCurrent(fav) }
             )
@@ -73,7 +71,6 @@ fun FavoritesScreen(
 @Composable
 fun FavoriteCard(
     favorite: FavoriteWallpaper,
-    onCropClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onItemClick: () -> Unit
 ) {
@@ -102,24 +99,6 @@ fun FavoriteCard(
                     .offset {
                         IntOffset((-currentScrollX).roundToInt(), 0)
                     }
-            )
-        }
-
-        // Hovering Bottom-Left: Crop button
-        IconButton(
-            onClick = onCropClick,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(8.dp)
-                .size(40.dp)
-                .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                .testTag("fav_crop_button_${favorite.id}"),
-            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Crop,
-                contentDescription = "Crop",
-                modifier = Modifier.size(20.dp)
             )
         }
 

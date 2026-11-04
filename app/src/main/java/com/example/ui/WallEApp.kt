@@ -46,7 +46,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.ui.screens.CropOverlay
 import com.example.ui.screens.DiscoverScreen
 import com.example.ui.screens.FavoritesScreen
 import com.example.ui.screens.SettingsScreen
@@ -168,19 +167,6 @@ fun WallEApp(
                         uiState = uiState
                     )
                 }
-            }
-
-            // Interactive crop overlay
-            uiState.editingCropWallpaper?.let { cropTarget ->
-                CropOverlay(
-                    target = cropTarget,
-                    onSave = { newOffset ->
-                        viewModel.saveCropOffset(cropTarget.id, newOffset)
-                    },
-                    onDismiss = {
-                        viewModel.closeCrop()
-                    }
-                )
             }
         }
     }

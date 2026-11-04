@@ -17,6 +17,7 @@ import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.Wallpaper
 import com.example.data.model.WallhavenImageItem
 import com.example.domain.facedetection.FaceDetectorHelper
+import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -39,8 +40,12 @@ class WallpaperRepository(
 
     val isNsfwMode: Flow<Boolean> = preferences.isNsfwModeFlow
     val currentWallpaper: Flow<CurrentWallpaperInfo> = preferences.currentWallpaperFlow
-    val sfwTags: Flow<Set<String>> = preferences.sfwTagsFlow
-    val nsfwTags: Flow<Set<String>> = preferences.nsfwTagsFlow
+    val sfwTags: Flow<Set<String>> = preferences.activeSfwTagsFlow
+    val nsfwTags: Flow<Set<String>> = preferences.activeNsfwTagsFlow
+    val savedSfwTags: Flow<Set<String>> = preferences.savedSfwTagsFlow
+    val savedNsfwTags: Flow<Set<String>> = preferences.savedNsfwTagsFlow
+    val activeSfwTags: Flow<Set<String>> = preferences.activeSfwTagsFlow
+    val activeNsfwTags: Flow<Set<String>> = preferences.activeNsfwTagsFlow
     val nsfwPurity: Flow<String> = preferences.nsfwPurityFlow
     val sfwCategory: Flow<String> = preferences.sfwCategoryFlow
     val nsfwCategory: Flow<String> = preferences.nsfwCategoryFlow
@@ -292,21 +297,20 @@ class WallpaperRepository(
                 subDir = rootDoc.createDirectory(subfolderName) ?: return@withContext
             }
 
-            // Check if already saved
-            val fileName = "${fav.id}.jpg"
-            if (subDir.findFile(fileName) == null) {
-                val newFile = subDir.createFile("image/jpeg", fileName) ?: return@withContext
-                // Download bitmap and write
-                val request = ImageRequest.Builder(context)
-                    .data(fav.url)
-                    .allowHardware(false)
-                    .build()
-                val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
-                val bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            // Determine extension (.png or .jpg) from url
+            val isPng = fav.url.endsWith(".png", ignoreCase = true)
+            val extension = if (isPng) ".png" else ".jpg"
+            val mimeType = if (isPng) "image/png" else "image/jpeg"
+            val fileName = "${fav.id}$extension"
 
-                if (bitmap != null) {
+            if (subDir.findFile(fileName) == null) {
+                val newFile = subDir.createFile(mimeType, fileName) ?: return@withContext
+                // Stream the original untouched full-resolution file from wallhaven
+                val request = Request.Builder().url(fav.url).build()
+                val response = NetworkClient.okHttpClient.newCall(request).execute()
+                response.body?.byteStream()?.use { inputStream ->
                     context.contentResolver.openOutputStream(newFile.uri)?.use { outStream ->
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, outStream)
+                        inputStream.copyTo(outStream)
                     }
                 }
             }
