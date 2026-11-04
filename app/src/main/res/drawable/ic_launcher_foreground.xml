@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Frame rounded rectangle -->
+    <path
+        android:fillColor="#384955"
+        android:pathData="M30,26 L78,26 A6,6 0 0,1 84,32 L84,76 A6,6 0 0,1 78,82 L30,82 A6,6 0 0,1 24,76 L24,32 A6,6 0 0,1 30,26 Z" />
+    <!-- Inner image area -->
+    <path
+        android:fillColor="#0D1B2A"
+        android:pathData="M33,30 L75,30 A3,3 0 0,1 78,33 L78,73 A3,3 0 0,1 75,76 L33,76 A3,3 0 0,1 30,73 L30,33 A3,3 0 0,1 33,30 Z" />
+    <!-- Glowing sun/moon -->
+    <path
+        android:fillColor="#F39C12"
+        android:pathData="M65,43 A5,5 0 1,1 55,43 A5,5 0 1,1 65,43 Z" />
+    <!-- Mountain peak 1 (back) -->
+    <path
+        android:fillColor="#4A6572"
+        android:pathData="M48,52 L62,68 L36,68 Z" />
+    <!-- Mountain peak 2 (front) -->
+    <path
+        android:fillColor="#00B4D8"
+        android:pathData="M59,48 L76,72 L42,72 Z" />
+    <!-- Aperture / crop line accent -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:pathData="M27,38 L27,29 L36,29 M81,38 L81,29 L72,29 M27,70 L27,79 L36,79 M81,70 L81,79 L72,79" />
+</vector>

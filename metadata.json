@@ -1,0 +1,6 @@
+{
+  "name": "Wall-e",
+  "description": "Dynamic wallpaper manager with Wallhaven integration, live wallpaper service, non-destructive smart face positioning, interval switching, and Material You theming.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
