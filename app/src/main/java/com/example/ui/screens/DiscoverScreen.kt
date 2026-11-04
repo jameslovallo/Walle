@@ -61,9 +61,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
+import com.example.ui.components.PositionedWallpaperImage
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -101,43 +101,19 @@ fun DiscoverScreen(
         ) {
             val url = uiState.currentWallpaper.url
             if (url.isNotBlank()) {
-                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val frameWidthPx = constraints.maxWidth.toFloat()
-                    val frameHeightPx = constraints.maxHeight.toFloat()
-                    // Wide wallpaper estimated ratio ~ 16:9
-                    val estimatedImageWidthPx = frameHeightPx * (16f / 9f)
-                    val maxScrollPx = (estimatedImageWidthPx - frameWidthPx).coerceAtLeast(1f)
-                    val currentScrollX = dragOffset * maxScrollPx
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(uiState.currentWallpaper.id, maxScrollPx) {
-                                detectDragGestures(
-                                    onDrag = { change, dragAmount ->
-                                        change.consume()
-                                        val newOffset = (dragOffset - (dragAmount.x / maxScrollPx)).coerceIn(0f, 1f)
-                                        dragOffset = newOffset
-                                        viewModel.updateDragOffset(newOffset)
-                                    },
-                                    onDragEnd = {
-                                        viewModel.commitDragOffset(dragOffset)
-                                    }
-                                )
-                            }
-                    ) {
-                        AsyncImage(
-                            model = url,
-                            contentDescription = "Current wallpaper",
-                            contentScale = ContentScale.FillHeight,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .offset {
-                                    IntOffset((-currentScrollX).roundToInt(), 0)
-                                }
-                        )
-                    }
-                }
+                PositionedWallpaperImage(
+                    url = url,
+                    horizontalOffset = dragOffset,
+                    fallbackUrl = uiState.currentWallpaper.thumbUrl,
+                    onDrag = { newOffset ->
+                        dragOffset = newOffset
+                        viewModel.updateDragOffset(newOffset)
+                    },
+                    onDragEnd = {
+                        viewModel.commitDragOffset(dragOffset)
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
             if (uiState.isLoading) {

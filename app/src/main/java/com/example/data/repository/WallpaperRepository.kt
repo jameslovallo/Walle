@@ -266,7 +266,6 @@ class WallpaperRepository(
         return try {
             val request = ImageRequest.Builder(context)
                 .data(imageUrl)
-                .size(720, 1280)
                 .allowHardware(false) // Software bitmap for ML Kit
                 .build()
 

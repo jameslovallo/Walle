@@ -20,44 +20,57 @@ object FaceDetectorHelper {
     }
 
     /**
-     * Calculates the smart horizontal offset (0.0 to 1.0) so that detected faces
-     * appear on the right side of a portrait screen.
-     * Non-destructive: returns a float offset.
+     * Refactored: Only provides positioning data (0.0 to 1.0) for how the untouched
+     * image should be positioned horizontally within the aspect-ratio-specific frame.
+     * Never mutates or crops the image.
      */
     suspend fun calculateSmartCropOffset(
         bitmap: Bitmap,
-        screenAspectRatio: Float = 9f / 19.5f
+        frameAspectRatio: Float = 9f / 19.5f
     ): Float = suspendCancellableCoroutine { continuation ->
         try {
             val image = InputImage.fromBitmap(bitmap, 0)
             detector.process(image)
                 .addOnSuccessListener { faces ->
-                    if (faces.isEmpty()) {
+                    val imgWidth = bitmap.width.toFloat()
+                    val imgHeight = bitmap.height.toFloat()
+                    val imgAspect = imgWidth / imgHeight
+
+                    // If image is narrower than or equal to frame (very tall narrow portrait),
+                    // no horizontal scroll is available, so center it.
+                    if (imgAspect <= frameAspectRatio) {
                         continuation.resume(0.5f)
                         return@addOnSuccessListener
                     }
 
-                    // Find the most prominent face (largest bounding box)
+                    // Visible width in image coordinates when scaled to fit vertical frame height
+                    val visibleWidthInImage = imgHeight * frameAspectRatio
+                    val scrollableWidth = imgWidth - visibleWidthInImage
+
+                    if (scrollableWidth <= 1f) {
+                        continuation.resume(0.5f)
+                        return@addOnSuccessListener
+                    }
+
+                    if (faces.isEmpty()) {
+                        // When no face detected, center image (0.5f) so user has full range left and right
+                        continuation.resume(0.5f)
+                        return@addOnSuccessListener
+                    }
+
+                    // Find primary face (largest area)
                     val primaryFace = faces.maxByOrNull {
                         it.boundingBox.width() * it.boundingBox.height()
                     } ?: faces[0]
 
-                    val faceCenterXRatio = primaryFace.boundingBox.centerX().toFloat() / bitmap.width.toFloat()
-                    val bitmapAspect = bitmap.width.toFloat() / bitmap.height.toFloat()
+                    val faceCenterX = primaryFace.boundingBox.centerX().toFloat()
 
-                    // If bitmap is wider than screen aspect ratio
-                    val visibleWidthRatio = (bitmap.height.toFloat() * screenAspectRatio) / bitmap.width.toFloat()
+                    // Position face toward the right side of the visible frame (e.g. at 68% of the visible window)
+                    val targetFrameFraction = 0.68f
+                    val targetWindowLeft = faceCenterX - (targetFrameFraction * visibleWidthInImage)
+                    val calculatedOffset = (targetWindowLeft / scrollableWidth).coerceIn(0f, 1f)
 
-                    if (visibleWidthRatio in 0.01f..0.99f) {
-                        // Position face at ~72% (right side of screen)
-                        val targetScreenX = 0.72f
-                        val desiredWindowStart = faceCenterXRatio - (targetScreenX * visibleWidthRatio)
-                        val maxWindowStart = 1.0f - visibleWidthRatio
-                        val computedOffset = (desiredWindowStart / maxWindowStart).coerceIn(0f, 1f)
-                        continuation.resume(computedOffset)
-                    } else {
-                        continuation.resume(0.5f)
-                    }
+                    continuation.resume(calculatedOffset)
                 }
                 .addOnFailureListener {
                     continuation.resume(0.5f)

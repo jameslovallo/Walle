@@ -34,10 +34,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.example.data.local.FavoriteWallpaper
 import com.example.ui.WallEViewModel
-import kotlin.math.roundToInt
+import com.example.ui.components.PositionedWallpaperImage
 
 @Composable
 fun FavoritesScreen(
@@ -83,24 +82,12 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val frameWidthPx = constraints.maxWidth.toFloat()
-            val frameHeightPx = constraints.maxHeight.toFloat()
-            val estimatedImageWidthPx = frameHeightPx * (16f / 9f)
-            val maxScrollPx = (estimatedImageWidthPx - frameWidthPx).coerceAtLeast(0f)
-            val currentScrollX = favorite.horizontalOffset * maxScrollPx
-
-            AsyncImage(
-                model = favorite.thumbUrl.ifBlank { favorite.url },
-                contentDescription = "Favorite image",
-                contentScale = ContentScale.FillHeight,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .offset {
-                        IntOffset((-currentScrollX).roundToInt(), 0)
-                    }
-            )
-        }
+        PositionedWallpaperImage(
+            url = favorite.thumbUrl.ifBlank { favorite.url },
+            fallbackUrl = favorite.url,
+            horizontalOffset = favorite.horizontalOffset,
+            modifier = Modifier.fillMaxSize()
+        )
 
         // Hovering Bottom-Right: Delete button
         IconButton(
