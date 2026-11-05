@@ -16,6 +16,7 @@ import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.Wallpaper
 import com.example.data.model.WallhavenImageItem
+import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -129,9 +130,40 @@ class WallpaperRepository(
     }
 
     /**
+     * Applies a favorite as current wallpaper.
+     * If the favorite was imported from a folder without existing positioning data (offset < 0f),
+     * runs face detection and applies positioning before setting the image to prevent jank.
+     * Otherwise preserves existing user positioning data.
+     */
+    suspend fun applyFavorite(fav: FavoriteWallpaper) = withContext(Dispatchers.IO) {
+        val finalOffset = if (fav.horizontalOffset in 0f..1f) {
+            // Preserves existing positioning data
+            fav.horizontalOffset
+        } else {
+            // Favorite applied from folder without existing positioning data:
+            // Calculate face/focal offset and update before setting image to prevent jank
+            val detected = detectFaceOffset(fav.localFilePath ?: fav.url)
+            favoriteDao.updateCropOffset(fav.id, detected)
+            detected
+        }
+
+        preferences.setCurrentWallpaper(
+            id = fav.id,
+            url = fav.url,
+            thumbUrl = fav.thumbUrl,
+            purity = fav.purity,
+            category = fav.category,
+            offset = finalOffset
+        )
+        notifyWallpaperChanged()
+    }
+
+    /**
      * Fetches and applies the next wallpaper.
-     * When tags are active, queries Wallhaven with inclusive tags.
-     * If no tag is selected, shuffles saved favorites.
+     * 1) When a new image is loaded from Wallhaven: face detection is performed and positioning
+     *    is applied before setting the image to prevent visual jank.
+     * 2) If no tag is selected, shuffles saved favorites (preserving existing positioning, or
+     *    detecting if missing).
      */
     suspend fun fetchAndApplyNextWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
@@ -142,10 +174,17 @@ class WallpaperRepository(
             var candidateWallpaper: Wallpaper? = null
 
             if (tags.isEmpty()) {
-                // If no tag is selected, shuffled photos saved from the favorites
+                // If no tag is selected, shuffled photos saved from favorites
                 val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
                 val randomFav = favoriteDao.getRandomFavorite(purities)
                 if (randomFav != null) {
+                    val finalOffset = if (randomFav.horizontalOffset in 0f..1f) {
+                        randomFav.horizontalOffset
+                    } else {
+                        val detected = detectFaceOffset(randomFav.localFilePath ?: randomFav.url)
+                        favoriteDao.updateCropOffset(randomFav.id, detected)
+                        detected
+                    }
                     candidateWallpaper = Wallpaper(
                         id = randomFav.id,
                         fullUrl = randomFav.url,
@@ -153,34 +192,38 @@ class WallpaperRepository(
                         purity = randomFav.purity,
                         category = randomFav.category,
                         resolution = randomFav.resolution,
-                        horizontalOffset = randomFav.horizontalOffset,
+                        horizontalOffset = finalOffset,
                         isFavorite = true
                     )
                 }
             }
 
             if (candidateWallpaper == null) {
-                // Query Wallhaven API
-                candidateWallpaper = fetchFromWallhaven(isNsfw, tags, existingIds)
+                // Query Wallhaven API (New image!)
+                val fetched = fetchFromWallhaven(isNsfw, tags, existingIds)
+                if (fetched != null) {
+                    // 1) When a new image is loaded: detect face and position to the right side of the screen
+                    // Apply positioning BEFORE setting the image to prevent jank
+                    val smartOffset = detectFaceOffset(fetched.fullUrl)
+                    candidateWallpaper = fetched.copy(horizontalOffset = smartOffset)
+                }
             }
 
             if (candidateWallpaper != null) {
-                val finalWallpaper = candidateWallpaper
-
-                // Update current wallpaper state
+                // Update current wallpaper state with final pre-calculated offset
                 preferences.setCurrentWallpaper(
-                    id = finalWallpaper.id,
-                    url = finalWallpaper.fullUrl,
-                    thumbUrl = finalWallpaper.thumbUrl,
-                    purity = finalWallpaper.purity,
-                    category = finalWallpaper.category,
-                    offset = finalWallpaper.horizontalOffset
+                    id = candidateWallpaper.id,
+                    url = candidateWallpaper.fullUrl,
+                    thumbUrl = candidateWallpaper.thumbUrl,
+                    purity = candidateWallpaper.purity,
+                    category = candidateWallpaper.category,
+                    offset = candidateWallpaper.horizontalOffset
                 )
 
                 // Broadcast update event to Live Wallpaper
                 notifyWallpaperChanged()
 
-                Result.success(finalWallpaper)
+                Result.success(candidateWallpaper)
             } else {
                 Result.failure(Exception("No wallpapers found"))
             }
@@ -264,9 +307,79 @@ class WallpaperRepository(
     }
 
     /**
+     * Runs ML Kit face detection on the image to position the focus to the right side of the screen
+     * within the device's aspect ratio.
+     */
+    suspend fun detectFaceOffset(imageSource: String): Float = withContext(Dispatchers.IO) {
+        if (imageSource.isBlank()) return@withContext 0.5f
+
+        try {
+            var bitmap: Bitmap? = null
+
+            // 1. If it's a local content:// or file:// URI
+            if (imageSource.startsWith("content://") || imageSource.startsWith("file://")) {
+                try {
+                    val uri = Uri.parse(imageSource)
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        BitmapFactory.decodeStream(input, null, bounds)
+                    }
+
+                    var sample = 1
+                    val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+                    while (maxDim / (sample * 2) >= 960) {
+                        sample *= 2
+                    }
+
+                    val opts = BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    }
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        bitmap = BitmapFactory.decodeStream(input, null, opts)
+                    }
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error decoding local bitmap for face detection", e)
+                }
+            }
+
+            // 2. If it's a remote URL or local decoding failed
+            if (bitmap == null) {
+                try {
+                    val request = ImageRequest.Builder(context)
+                        .data(imageSource)
+                        .size(1024, 1024)
+                        .allowHardware(false) // Must be software bitmap for ML Kit
+                        .build()
+                    val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
+                    bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error loading remote bitmap for face detection", e)
+                }
+            }
+
+            val finalBitmap = bitmap
+            if (finalBitmap != null) {
+                val metrics = context.resources.displayMetrics
+                val deviceAspect = if (metrics.heightPixels > 0) {
+                    metrics.widthPixels.toFloat() / metrics.heightPixels.toFloat()
+                } else {
+                    9f / 19.5f
+                }
+                FaceDetectorHelper.calculateSmartCropOffset(finalBitmap, deviceAspect)
+            } else {
+                0.5f
+            }
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error in detectFaceOffset", e)
+            0.5f
+        }
+    }
+
+    /**
      * Internal thumbnail storage helper.
      * Generates and stores thumbnails in the app's internal storage directory,
-     * ensuring high-performance grid loading without polluting or accessing the user's selected folder.
+     * ensuring high-performance grid loading without writing to the user's selected folder.
      */
     fun getInternalThumbnailFile(id: String): File {
         val thumbsDir = File(context.filesDir, "favorites_thumbs")
@@ -348,6 +461,8 @@ class WallpaperRepository(
 
     /**
      * Loads the existing index.json and wallpaper files from the selected folder into the app.
+     * If positioning data exists in index.json, it is preserved. If not, it is marked with -1f
+     * so that face detection runs upon application, preventing jank.
      * Thumbnails are generated strictly into the app's internal storage for high performance.
      */
     suspend fun syncAndLoadFromSelectedFolder(folderUriString: String) = withContext(Dispatchers.IO) {
@@ -427,7 +542,15 @@ class WallpaperRepository(
                     ?: localFileInfo?.second
                     ?: "sfw"
                 val category = indexJson?.optString("category") ?: "all"
-                val horizontalOffset = indexJson?.optDouble("horizontalOffset", 0.5)?.toFloat() ?: 0.5f
+
+                // Check if existing positioning data was provided
+                val hasExistingOffset = indexJson != null && indexJson.has("horizontalOffset")
+                val horizontalOffset = if (hasExistingOffset) {
+                    indexJson!!.optDouble("horizontalOffset", 0.5).toFloat().coerceIn(0f, 1f)
+                } else {
+                    -1f // Unset: face detection will run upon application
+                }
+
                 val timestamp = indexJson?.optLong("timestamp", System.currentTimeMillis()) ?: System.currentTimeMillis()
                 val url = indexJson?.optString("url")
                     ?: localFileInfo?.first?.uri?.toString()
@@ -531,7 +654,9 @@ class WallpaperRepository(
                     put("id", fav.id)
                     put("purity", fav.purity)
                     put("category", fav.category)
-                    put("horizontalOffset", fav.horizontalOffset)
+                    if (fav.horizontalOffset in 0f..1f) {
+                        put("horizontalOffset", fav.horizontalOffset)
+                    }
                     put("url", fav.url)
                     put("timestamp", fav.addedTimestamp)
                 }

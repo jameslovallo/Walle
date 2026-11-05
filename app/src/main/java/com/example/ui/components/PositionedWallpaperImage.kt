@@ -49,8 +49,9 @@ fun PositionedWallpaperImage(
     val activeUrl = if (isError && !fallbackUrl.isNullOrBlank()) fallbackUrl else url.ifBlank { fallbackUrl ?: "" }
 
     // Map horizontalOffset (0.0 .. 1.0) to horizontalBias (-1.0 .. 1.0)
-    val biasX = (horizontalOffset.coerceIn(0f, 1f) * 2f - 1f)
-    var localOffset by remember(horizontalOffset) { mutableFloatStateOf(horizontalOffset) }
+    val effectiveOffset = if (horizontalOffset in 0f..1f) horizontalOffset else 0.5f
+    val biasX = (effectiveOffset * 2f - 1f)
+    var localOffset by remember(horizontalOffset) { mutableFloatStateOf(effectiveOffset) }
 
     Box(
         modifier = modifier

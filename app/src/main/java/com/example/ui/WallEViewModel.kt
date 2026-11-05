@@ -242,15 +242,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     fun applyFavoriteAsCurrent(fav: FavoriteWallpaper) {
         viewModelScope.launch {
-            preferences.setCurrentWallpaper(
-                id = fav.id,
-                url = fav.url,
-                thumbUrl = fav.thumbUrl,
-                purity = fav.purity,
-                category = fav.category,
-                offset = fav.horizontalOffset
-            )
-            repository.notifyWallpaperChanged()
+            repository.applyFavorite(fav)
         }
     }
 
