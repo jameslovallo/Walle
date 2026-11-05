@@ -12,6 +12,8 @@ import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.Matrix
+import androidx.core.graphics.PathParser
 import com.example.data.model.ModeFilterSettings
 import kotlin.math.hypot
 import kotlin.math.max
@@ -27,6 +29,9 @@ object WallpaperRenderHelper {
         filters: ModeFilterSettings
     ) {
         if (screenWidth <= 0 || screenHeight <= 0) return
+
+        // Fill background with black so opacity brightness works as requested
+        canvas.drawColor(Color.BLACK)
 
         val bWidth = bitmap.width.toFloat()
         val bHeight = bitmap.height.toFloat()
@@ -50,30 +55,26 @@ object WallpaperRenderHelper {
 
         val dstRect = Rect(0, 0, screenWidth, screenHeight)
 
-        // Setup Paint with Brightness and Contrast
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        val cm = ColorMatrix()
-        val c = filters.contrast
-        val b = (filters.brightness - 1.0f) * 255f
-        val t = (1.0f - c) * 128f + b
+        // Setup Paint with Brightness (opacity over black) and Grayscale
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            alpha = (filters.brightness.coerceIn(0f, 1f) * 255).toInt()
+        }
 
-        cm.set(floatArrayOf(
-            c, 0f, 0f, 0f, t,
-            0f, c, 0f, 0f, t,
-            0f, 0f, c, 0f, t,
-            0f, 0f, 0f, 1f, 0f
-        ))
-        paint.colorFilter = ColorMatrixColorFilter(cm)
+        if (filters.grayscale > 0.01f) {
+            val cm = ColorMatrix()
+            cm.setSaturation((1.0f - filters.grayscale).coerceIn(0f, 1f))
+            paint.colorFilter = ColorMatrixColorFilter(cm)
+        }
 
-        if (filters.blur > 1f) {
-            // If blur is active, create downscaled cropped bitmap and blur
+        val blurRadius = (filters.blur.coerceIn(0f, 1f) * 25f).toInt()
+        if (blurRadius >= 1) {
             try {
                 val cropped = Bitmap.createBitmap(bitmap, srcRect.left, srcRect.top, srcRect.width(), srcRect.height())
                 val scaleFactor = 0.25f
                 val smallW = max(1, (cropped.width * scaleFactor).toInt())
                 val smallH = max(1, (cropped.height * scaleFactor).toInt())
                 val scaled = Bitmap.createScaledBitmap(cropped, smallW, smallH, true)
-                val blurred = fastBlur(scaled, (filters.blur * scaleFactor).toInt().coerceAtLeast(1))
+                val blurred = fastBlur(scaled, (blurRadius * scaleFactor).toInt().coerceAtLeast(1))
                 canvas.drawBitmap(blurred, null, dstRect, paint)
                 if (cropped != bitmap) cropped.recycle()
                 if (scaled != blurred) scaled.recycle()
@@ -90,13 +91,13 @@ object WallpaperRenderHelper {
             val cx = screenWidth / 2f
             val cy = screenHeight / 2f
             val radius = hypot(cx, cy)
-            val alpha = (filters.vignette.coerceIn(0f, 1f) * 230).toInt()
+            val alpha = (filters.vignette.coerceIn(0f, 1f) * 240).toInt()
             val edgeColor = Color.argb(alpha, 0, 0, 0)
 
             vignettePaint.shader = RadialGradient(
                 cx, cy, radius,
                 intArrayOf(Color.TRANSPARENT, edgeColor),
-                floatArrayOf(0.4f, 1.0f),
+                floatArrayOf(0.35f, 1.0f),
                 Shader.TileMode.CLAMP
             )
             canvas.drawRect(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat(), vignettePaint)
@@ -104,7 +105,8 @@ object WallpaperRenderHelper {
     }
 
     /**
-     * Draws the red heart or broken heart feedback icon on the launcher.
+     * Draws the red heart or broken heart feedback icon on the launcher,
+     * consistent with the Material Design icons used in the app.
      */
     fun drawHeartFeedback(
         canvas: Canvas,
@@ -114,11 +116,11 @@ object WallpaperRenderHelper {
         progress: Float // 0f (start) to 1f (end)
     ) {
         val alpha = ((1.0f - progress).coerceIn(0f, 1f) * 255).toInt()
-        val scale = 1.0f + 0.3f * progress // slight expanding pop effect
-        val baseSize = 80f * scale
+        val scale = 1.0f + 0.35f * progress
+        val baseSize = 88f * scale
 
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#FF1744") // Vibrant Red
+            color = Color.parseColor("#E53935") // Material Red 600
             this.alpha = alpha
             style = Paint.Style.FILL
         }
@@ -126,31 +128,34 @@ object WallpaperRenderHelper {
         canvas.save()
         canvas.translate(x, y)
 
-        val path = Path()
-        // Draw heart shape centered at (0, 0)
-        val s = baseSize / 100f
-        path.moveTo(0f, -20f * s)
-        path.cubicTo(-40f * s, -70f * s, -90f * s, -10f * s, 0f, 70f * s)
-        path.cubicTo(90f * s, -10f * s, 40f * s, -70f * s, 0f, -20f * s)
-        path.close()
+        // Material Design Favorite 24x24 icon path
+        val materialHeartPathData = "M12,21.35L10.55,20.03C5.4,15.36 2,12.28 2,8.5C2,5.42 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.09C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.42 22,8.5C22,12.28 18.6,15.36 13.45,20.04L12,21.35Z"
+        val path = PathParser.createPathFromPathData(materialHeartPathData)
+        val s = baseSize / 24f
+        val matrix = Matrix().apply {
+            postTranslate(-12f, -12f)
+            postScale(s, s)
+        }
+        path.transform(matrix)
 
         canvas.drawPath(path, paint)
 
         if (!isFavorited) {
-            // Draw crack / lightning line through center for broken heart
+            // Draw clean lightning crack through center for broken heart
             val crackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE
                 this.alpha = alpha
-                strokeWidth = 6f * s
+                strokeWidth = 3.5f * s
                 style = Paint.Style.STROKE
                 strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
             }
             val crack = Path()
-            crack.moveTo(0f, -40f * s)
-            crack.lineTo(-12f * s, -15f * s)
-            crack.lineTo(10f * s, 10f * s)
-            crack.lineTo(-5f * s, 35f * s)
-            crack.lineTo(0f, 65f * s)
+            crack.moveTo(0f, -8f * s)
+            crack.lineTo(-3f * s, -2f * s)
+            crack.lineTo(2f * s, 3f * s)
+            crack.lineTo(-1f * s, 8f * s)
+            crack.lineTo(0f, 11f * s)
             canvas.drawPath(crack, crackPaint)
         }
 

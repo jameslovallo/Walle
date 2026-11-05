@@ -175,6 +175,7 @@ class WallELiveWallpaperService : WallpaperService() {
                 try {
                     val request = ImageRequest.Builder(this@WallELiveWallpaperService)
                         .data(url)
+                        .size(1080, 1920)
                         .allowHardware(false)
                         .build()
                     val result = (imageLoader.execute(request) as? SuccessResult)?.drawable

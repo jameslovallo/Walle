@@ -1,12 +1,14 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -16,7 +18,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,10 +29,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -42,7 +48,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -54,19 +63,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.example.data.model.WallhavenTags
 import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
 import com.example.ui.components.PositionedWallpaperImage
-import kotlin.math.roundToInt
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun DiscoverScreen(
     viewModel: WallEViewModel,
@@ -79,202 +85,308 @@ fun DiscoverScreen(
     var tagInputText by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+    val autocompleteSuggestions = remember(tagInputText, savedTags) {
+        if (tagInputText.isNotBlank()) {
+            WallhavenTags.getAutocompleteSuggestions(tagInputText, savedTags, limit = 6)
+        } else {
+            emptyList()
+        }
+    }
+
+    val similarSuggestions = remember(tagInputText, activeTags, savedTags) {
+        if (tagInputText.isNotBlank()) {
+            val queryTags = setOf(tagInputText.trim().lowercase())
+            WallhavenTags.getSimilarTags(queryTags, savedTags, limit = 5)
+        } else if (activeTags.isNotEmpty()) {
+            WallhavenTags.getSimilarTags(activeTags, savedTags, limit = 6)
+        } else {
+            emptyList()
+        }
+    }
+
+    PullToRefreshBox(
+        isRefreshing = uiState.isLoading,
+        onRefresh = { viewModel.fetchNextWallpaper() },
+        modifier = modifier.fillMaxSize()
     ) {
-        // Compact Main Preview Card in device aspect ratio with direct drag positioning
-        val currentOffset = uiState.currentWallpaper.horizontalOffset
-        var dragOffset by remember(currentOffset) { mutableFloatStateOf(currentOffset) }
-
-        Box(
+        Column(
             modifier = Modifier
-                .height(270.dp)
-                .aspectRatio(9f / 18.5f)
-                .shadow(8.dp, RoundedCornerShape(22.dp))
-                .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .testTag("wallpaper_preview_card")
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            val url = uiState.currentWallpaper.url
-            if (url.isNotBlank()) {
-                PositionedWallpaperImage(
-                    url = url,
-                    horizontalOffset = dragOffset,
-                    fallbackUrl = uiState.currentWallpaper.thumbUrl,
-                    onDrag = { newOffset ->
-                        dragOffset = newOffset
-                        viewModel.updateDragOffset(newOffset)
-                    },
-                    onDragEnd = {
-                        viewModel.commitDragOffset(dragOffset)
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            // Compact Main Preview Card in device aspect ratio with direct drag positioning
+            val currentOffset = uiState.currentWallpaper.horizontalOffset
+            var dragOffset by remember(currentOffset) { mutableFloatStateOf(currentOffset) }
 
-            if (uiState.isLoading) {
-                Box(
+            Box(
+                modifier = Modifier
+                    .height(270.dp)
+                    .aspectRatio(9f / 18.5f)
+                    .shadow(8.dp, RoundedCornerShape(22.dp))
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .testTag("wallpaper_preview_card")
+            ) {
+                val url = uiState.currentWallpaper.url
+                if (url.isNotBlank()) {
+                    PositionedWallpaperImage(
+                        url = url,
+                        horizontalOffset = dragOffset,
+                        fallbackUrl = uiState.currentWallpaper.thumbUrl,
+                        onDrag = { newOffset ->
+                            dragOffset = newOffset
+                            viewModel.updateDragOffset(newOffset)
+                        },
+                        onDragEnd = {
+                            viewModel.commitDragOffset(dragOffset)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                if (uiState.isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.35f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                }
+
+                // Hovering Bottom-Right: Heart button with dynamic state
+                val heartContainerColor by animateColorAsState(
+                    targetValue = if (uiState.isCurrentFavorite) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
+                    label = "heart_color"
+                )
+                IconButton(
+                    onClick = { viewModel.toggleCurrentFavorite() },
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f)),
-                    contentAlignment = Alignment.Center
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .size(42.dp)
+                        .background(heartContainerColor, CircleShape)
+                        .testTag("favorite_toggle_button"),
+                    colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
                 ) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(36.dp)
+                    Icon(
+                        imageVector = if (uiState.isCurrentFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = "Favorite",
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
 
-            // Hovering Bottom-Right: Heart button with dynamic state
-            val heartContainerColor by animateColorAsState(
-                targetValue = if (uiState.isCurrentFavorite) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
-                label = "heart_color"
-            )
-            IconButton(
-                onClick = { viewModel.toggleCurrentFavorite() },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(10.dp)
-                    .size(42.dp)
-                    .background(heartContainerColor, CircleShape)
-                    .testTag("favorite_toggle_button"),
-                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-            ) {
-                Icon(
-                    imageVector = if (uiState.isCurrentFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = "Favorite",
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
+            Spacer(modifier = Modifier.height(12.dp))
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Text input above tags grid to add a new tag
-        OutlinedTextField(
-            value = tagInputText,
-            onValueChange = { tagInputText = it },
-            placeholder = { Text("Add tag") },
-            singleLine = true,
-            trailingIcon = {
-                if (tagInputText.isNotBlank()) {
-                    IconButton(
-                        onClick = {
+            // Text input above tags grid to add a new tag
+            OutlinedTextField(
+                value = tagInputText,
+                onValueChange = { tagInputText = it },
+                placeholder = { Text("Add tag") },
+                singleLine = true,
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingIcon = {
+                    if (tagInputText.isNotBlank()) {
+                        IconButton(
+                            onClick = {
+                                viewModel.addTag(tagInputText)
+                                tagInputText = ""
+                                focusManager.clearFocus()
+                            },
+                            modifier = Modifier.testTag("add_tag_icon_button")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "Add")
+                        }
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        if (tagInputText.isNotBlank()) {
                             viewModel.addTag(tagInputText)
                             tagInputText = ""
                             focusManager.clearFocus()
-                        },
-                        modifier = Modifier.testTag("add_tag_icon_button")
+                        }
+                    }
+                ),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("add_tag_text_input")
+            )
+
+            // Autocomplete suggestions from Wallhaven
+            AnimatedVisibility(
+                visible = autocompleteSuggestions.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "Add")
+                        autocompleteSuggestions.forEach { suggestion ->
+                            SuggestionChip(
+                                onClick = {
+                                    viewModel.addTag(suggestion)
+                                    tagInputText = ""
+                                    focusManager.clearFocus()
+                                },
+                                label = { Text(suggestion) },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    labelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("autocomplete_$suggestion")
+                            )
+                        }
                     }
                 }
-            },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    if (tagInputText.isNotBlank()) {
-                        viewModel.addTag(tagInputText)
-                        tagInputText = ""
-                        focusManager.clearFocus()
-                    }
-                }
-            ),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("add_tag_text_input")
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Grid of tags with 'x' button on each tag to remove from list
-        FlowRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("tags_flow_grid"),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            savedTags.forEach { tag ->
-                val isSelected = activeTags.contains(tag)
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { viewModel.toggleTag(tag) },
-                    label = { Text(tag) },
-                    trailingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Remove tag",
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clickable {
-                                    viewModel.removeTag(tag)
-                                }
-                                .testTag("remove_tag_${tag}")
-                        )
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                        selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    modifier = Modifier.testTag("tag_chip_$tag")
-                )
             }
-        }
 
-        Spacer(modifier = Modifier.height(10.dp))
+            // Similar Wallhaven tags suggestions
+            AnimatedVisibility(
+                visible = similarSuggestions.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        similarSuggestions.forEach { similarTag ->
+                            AssistChip(
+                                onClick = {
+                                    viewModel.addTag(similarTag)
+                                    tagInputText = ""
+                                    focusManager.clearFocus()
+                                },
+                                label = { Text(similarTag) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    labelColor = MaterialTheme.colorScheme.onSurface
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("similar_$similarTag")
+                            )
+                        }
+                    }
+                }
+            }
 
-        // In NSFW mode: Segmented button for Both / Sketchy / NSFW
-        if (isNsfw) {
-            val purityOptions = listOf("both" to "Both", "sketchy" to "Sketchy", "nsfw" to "NSFW")
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Grid of tags with 'x' button on each tag to remove from list
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("tags_flow_grid"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                savedTags.forEach { tag ->
+                    val isSelected = activeTags.contains(tag)
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { viewModel.toggleTag(tag) },
+                        label = { Text(tag) },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Remove tag",
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable {
+                                        viewModel.removeTag(tag)
+                                    }
+                                    .testTag("remove_tag_${tag}")
+                            )
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                            selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier.testTag("tag_chip_$tag")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // In NSFW mode: Segmented button for Both / Sketchy / NSFW
+            if (isNsfw) {
+                val purityOptions = listOf("both" to "Both", "sketchy" to "Sketchy", "nsfw" to "NSFW")
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .testTag("nsfw_purity_segmented_row")
+                ) {
+                    purityOptions.forEachIndexed { index, (key, label) ->
+                        SegmentedButton(
+                            selected = uiState.nsfwPurity == key,
+                            onClick = { viewModel.setNsfwPurity(key) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = purityOptions.size)
+                        ) {
+                            Text(label)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            // Category button group: all, anime, people (defaults to people for nsfw)
+            val categoryOptions = if (isNsfw) {
+                listOf("people" to "People", "anime" to "Anime", "all" to "All")
+            } else {
+                listOf("all" to "All", "anime" to "Anime", "people" to "People")
+            }
+            val currentCategory = if (isNsfw) uiState.nsfwCategory else uiState.sfwCategory
+
             SingleChoiceSegmentedButtonRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
-                    .testTag("nsfw_purity_segmented_row")
+                    .testTag("category_segmented_row")
             ) {
-                purityOptions.forEachIndexed { index, (key, label) ->
+                categoryOptions.forEachIndexed { index, (key, label) ->
                     SegmentedButton(
-                        selected = uiState.nsfwPurity == key,
-                        onClick = { viewModel.setNsfwPurity(key) },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = purityOptions.size)
+                        selected = currentCategory == key,
+                        onClick = { viewModel.setCategory(key) },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size)
                     ) {
                         Text(label)
                     }
-                }
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-
-        // Category button group: all, anime, people (defaults to people for nsfw)
-        val categoryOptions = if (isNsfw) {
-            listOf("people" to "People", "anime" to "Anime", "all" to "All")
-        } else {
-            listOf("all" to "All", "anime" to "Anime", "people" to "People")
-        }
-        val currentCategory = if (isNsfw) uiState.nsfwCategory else uiState.sfwCategory
-
-        SingleChoiceSegmentedButtonRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .testTag("category_segmented_row")
-        ) {
-            categoryOptions.forEachIndexed { index, (key, label) ->
-                SegmentedButton(
-                    selected = currentCategory == key,
-                    onClick = { viewModel.setCategory(key) },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size)
-                ) {
-                    Text(label)
                 }
             }
         }

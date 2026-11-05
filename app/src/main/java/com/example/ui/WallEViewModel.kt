@@ -249,15 +249,24 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateFilters(brightness: Float, blur: Float, vignette: Float, contrast: Float) {
+    fun updateFilters(grayscale: Float, blur: Float, brightness: Float, vignette: Float) {
         viewModelScope.launch {
             if (_uiState.value.isNsfwMode) {
-                preferences.updateNsfwFilters(brightness, blur, vignette, contrast)
+                preferences.updateNsfwFilters(grayscale, blur, brightness, vignette)
             } else {
-                preferences.updateSfwFilters(brightness, blur, vignette, contrast)
+                preferences.updateSfwFilters(grayscale, blur, brightness, vignette)
             }
             repository.notifyWallpaperChanged()
         }
+    }
+
+    fun resetFilters() {
+        updateFilters(
+            grayscale = 0.0f,
+            blur = 0.0f,
+            brightness = 1.0f,
+            vignette = 0.0f
+        )
     }
 
     fun setApiKey(key: String) {

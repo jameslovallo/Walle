@@ -16,7 +16,6 @@ import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.Wallpaper
 import com.example.data.model.WallhavenImageItem
-import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -164,14 +163,7 @@ class WallpaperRepository(
             }
 
             if (candidateWallpaper != null) {
-                // Determine face detection offset if not already favorite
-                val finalOffset = if (candidateWallpaper.isFavorite) {
-                    candidateWallpaper.horizontalOffset
-                } else {
-                    detectFaceOffset(candidateWallpaper.fullUrl)
-                }
-
-                val finalWallpaper = candidateWallpaper.copy(horizontalOffset = finalOffset)
+                val finalWallpaper = candidateWallpaper
 
                 // Update current wallpaper state
                 preferences.setCurrentWallpaper(
@@ -180,7 +172,7 @@ class WallpaperRepository(
                     thumbUrl = finalWallpaper.thumbUrl,
                     purity = finalWallpaper.purity,
                     category = finalWallpaper.category,
-                    offset = finalOffset
+                    offset = finalWallpaper.horizontalOffset
                 )
 
                 // Broadcast update event to Live Wallpaper
@@ -235,7 +227,7 @@ class WallpaperRepository(
             null
         }
 
-        val response = apiService.searchWallpapers(
+        var response = apiService.searchWallpapers(
             query = queryParam,
             categories = categoriesCode,
             purity = purityCode,
@@ -243,7 +235,18 @@ class WallpaperRepository(
             apiKey = apiKey
         )
 
-        // Filter out duplicate IDs
+        // If specific tag search returned 0 items, fallback to general search so wallpapers always load
+        if (response.data.isEmpty() && queryParam != null) {
+            response = apiService.searchWallpapers(
+                query = null,
+                categories = categoriesCode,
+                purity = purityCode,
+                sorting = "random",
+                apiKey = apiKey
+            )
+        }
+
+        // Filter out duplicate IDs if possible
         val items = response.data.filter { it.id !in existingIds }
         val item = items.firstOrNull() ?: response.data.firstOrNull() ?: return null
 
@@ -260,26 +263,6 @@ class WallpaperRepository(
             horizontalOffset = 0.5f,
             isFavorite = false
         )
-    }
-
-    private suspend fun detectFaceOffset(imageUrl: String): Float {
-        return try {
-            val request = ImageRequest.Builder(context)
-                .data(imageUrl)
-                .allowHardware(false) // Software bitmap for ML Kit
-                .build()
-
-            val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
-            val bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
-
-            if (bitmap != null) {
-                FaceDetectorHelper.calculateSmartCropOffset(bitmap)
-            } else {
-                0.5f
-            }
-        } catch (e: Exception) {
-            0.5f
-        }
     }
 
     suspend fun saveWallpaperToLocalFolder(fav: FavoriteWallpaper) = withContext(Dispatchers.IO) {

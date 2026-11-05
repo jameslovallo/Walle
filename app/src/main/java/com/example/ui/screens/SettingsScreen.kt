@@ -15,30 +15,30 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BrightnessMedium
-import androidx.compose.material.icons.filled.BlurOn
-import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Timelapse
-import androidx.compose.material.icons.filled.Vignette
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -49,12 +49,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
 import com.example.wallpaper.WallELiveWallpaperService
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,6 +68,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val isNsfw = uiState.isNsfwMode
     val activeFilters = if (isNsfw) uiState.nsfwFilters else uiState.sfwFilters
 
@@ -103,185 +108,388 @@ fun SettingsScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Apply Live Wallpaper Button
-        Button(
-            onClick = {
-                applyLiveWallpaper(context)
-            },
+        // Section 1: Live Wallpaper
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
-                .testTag("apply_live_wallpaper_button"),
-            shape = RoundedCornerShape(16.dp)
+                .testTag("section_live_wallpaper")
         ) {
-            Icon(Icons.Default.Wallpaper, contentDescription = null)
-            Spacer(modifier = Modifier.width(10.dp))
-            Text("Set Live Wallpaper")
-        }
-
-        // Interval dropdown
-        ExposedDropdownMenuBox(
-            expanded = intervalExpanded,
-            onExpandedChange = { intervalExpanded = it },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            val selectedLabel = intervalOptions.firstOrNull { it.first == uiState.intervalMinutes }?.second ?: "${uiState.intervalMinutes}m"
-            OutlinedTextField(
-                value = selectedLabel,
-                onValueChange = {},
-                readOnly = true,
-                leadingIcon = { Icon(Icons.Default.Timelapse, contentDescription = null) },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = intervalExpanded) },
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                    .testTag("interval_dropdown"),
-                shape = RoundedCornerShape(16.dp)
-            )
-            ExposedDropdownMenu(
-                expanded = intervalExpanded,
-                onDismissRequest = { intervalExpanded = false }
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                intervalOptions.forEach { (mins, label) ->
-                    DropdownMenuItem(
-                        text = { Text(label) },
-                        onClick = {
-                            viewModel.setIntervalMinutes(context, mins)
-                            intervalExpanded = false
-                        },
-                        modifier = Modifier.testTag("interval_item_$mins")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Wallpaper,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
                     )
+                    Text(
+                        text = "Live Wallpaper",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                // Apply Live Wallpaper Button
+                Button(
+                    onClick = {
+                        applyLiveWallpaper(context)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("apply_live_wallpaper_button"),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.Wallpaper, contentDescription = null)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("Set Live Wallpaper")
+                }
+
+                // Interval dropdown
+                ExposedDropdownMenuBox(
+                    expanded = intervalExpanded,
+                    onExpandedChange = { intervalExpanded = it },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val selectedLabel = intervalOptions.firstOrNull { it.first == uiState.intervalMinutes }?.second
+                        ?: "${uiState.intervalMinutes}m"
+                    OutlinedTextField(
+                        value = selectedLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Update Interval") },
+                        leadingIcon = { Icon(Icons.Default.Timelapse, contentDescription = null) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = intervalExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .testTag("interval_dropdown"),
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = intervalExpanded,
+                        onDismissRequest = { intervalExpanded = false }
+                    ) {
+                        intervalOptions.forEach { (mins, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    viewModel.setIntervalMinutes(context, mins)
+                                    intervalExpanded = false
+                                },
+                                modifier = Modifier.testTag("interval_item_$mins")
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Mode-specific Filters
-        // Brightness slider
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.BrightnessMedium, contentDescription = null, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Slider(
-                value = activeFilters.brightness,
-                onValueChange = {
-                    viewModel.updateFilters(
-                        brightness = it,
-                        blur = activeFilters.blur,
-                        vignette = activeFilters.vignette,
-                        contrast = activeFilters.contrast
-                    )
-                },
-                valueRange = 0.2f..1.8f,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("brightness_slider")
-            )
-        }
-
-        // Blur slider
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.BlurOn, contentDescription = null, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Slider(
-                value = activeFilters.blur,
-                onValueChange = {
-                    viewModel.updateFilters(
-                        brightness = activeFilters.brightness,
-                        blur = it,
-                        vignette = activeFilters.vignette,
-                        contrast = activeFilters.contrast
-                    )
-                },
-                valueRange = 0f..25f,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("blur_slider")
-            )
-        }
-
-        // Vignette slider
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.Vignette, contentDescription = null, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Slider(
-                value = activeFilters.vignette,
-                onValueChange = {
-                    viewModel.updateFilters(
-                        brightness = activeFilters.brightness,
-                        blur = activeFilters.blur,
-                        vignette = it,
-                        contrast = activeFilters.contrast
-                    )
-                },
-                valueRange = 0f..1f,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("vignette_slider")
-            )
-        }
-
-        // Contrast slider
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.Contrast, contentDescription = null, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Slider(
-                value = activeFilters.contrast,
-                onValueChange = {
-                    viewModel.updateFilters(
-                        brightness = activeFilters.brightness,
-                        blur = activeFilters.blur,
-                        vignette = activeFilters.vignette,
-                        contrast = it
-                    )
-                },
-                valueRange = 0.5f..1.5f,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("contrast_slider")
-            )
-        }
-
-        // Wallhaven API Key input
-        OutlinedTextField(
-            value = uiState.apiKey,
-            onValueChange = { viewModel.setApiKey(it) },
-            leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
-            placeholder = { Text("Wallhaven API Key") },
-            singleLine = true,
+        // Section 2: Image Filters (stored separately for SFW and NSFW modes)
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .testTag("api_key_input"),
-            shape = RoundedCornerShape(16.dp)
-        )
+                .testTag("section_filters")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoFixHigh,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Image Filters",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Text(
+                        text = if (isNsfw) "NSFW Mode" else "SFW Mode",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
 
-        // Local User Folder Picker
-        OutlinedButton(
-            onClick = { folderPickerLauncher.launch(null) },
+                // 1. Grayscale Filter Slider
+                val grayscalePercent = (activeFilters.grayscale * 100).roundToInt()
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Grayscale",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "$grayscalePercent%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Slider(
+                        value = activeFilters.grayscale,
+                        onValueChange = { newVal ->
+                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
+                            if (snapped != activeFilters.grayscale) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                viewModel.updateFilters(
+                                    grayscale = snapped,
+                                    blur = activeFilters.blur,
+                                    brightness = activeFilters.brightness,
+                                    vignette = activeFilters.vignette
+                                )
+                            }
+                        },
+                        valueRange = 0f..1f,
+                        steps = 19,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("grayscale_slider")
+                    )
+                }
+
+                // 2. Blur Filter Slider
+                val blurPercent = (activeFilters.blur * 100).roundToInt()
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Blur",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "$blurPercent%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Slider(
+                        value = activeFilters.blur,
+                        onValueChange = { newVal ->
+                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
+                            if (snapped != activeFilters.blur) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                viewModel.updateFilters(
+                                    grayscale = activeFilters.grayscale,
+                                    blur = snapped,
+                                    brightness = activeFilters.brightness,
+                                    vignette = activeFilters.vignette
+                                )
+                            }
+                        },
+                        valueRange = 0f..1f,
+                        steps = 19,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("blur_slider")
+                    )
+                }
+
+                // 3. Brightness Filter Slider
+                val brightnessPercent = (activeFilters.brightness * 100).roundToInt()
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Brightness",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "$brightnessPercent%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Slider(
+                        value = activeFilters.brightness,
+                        onValueChange = { newVal ->
+                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
+                            if (snapped != activeFilters.brightness) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                viewModel.updateFilters(
+                                    grayscale = activeFilters.grayscale,
+                                    blur = activeFilters.blur,
+                                    brightness = snapped,
+                                    vignette = activeFilters.vignette
+                                )
+                            }
+                        },
+                        valueRange = 0f..1f,
+                        steps = 19,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("brightness_slider")
+                    )
+                }
+
+                // 4. Vignette Filter Slider
+                val vignettePercent = (activeFilters.vignette * 100).roundToInt()
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Vignette",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "$vignettePercent%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Slider(
+                        value = activeFilters.vignette,
+                        onValueChange = { newVal ->
+                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
+                            if (snapped != activeFilters.vignette) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                viewModel.updateFilters(
+                                    grayscale = activeFilters.grayscale,
+                                    blur = activeFilters.blur,
+                                    brightness = activeFilters.brightness,
+                                    vignette = snapped
+                                )
+                            }
+                        },
+                        valueRange = 0f..1f,
+                        steps = 19,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("vignette_slider")
+                    )
+                }
+
+                // Reset to Defaults Button
+                OutlinedButton(
+                    onClick = {
+                        viewModel.resetFilters()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("reset_filters_button"),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.RestartAlt, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Reset Filters")
+                }
+            }
+        }
+
+        // Section 3: Storage & Integration
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
-                .testTag("select_folder_button"),
-            shape = RoundedCornerShape(16.dp)
+                .testTag("section_storage_integration")
         ) {
-            Icon(Icons.Default.Folder, contentDescription = null)
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                if (uiState.localFolderUri.isNotBlank()) "Folder Selected" else "Select Save Folder"
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Storage & Integration",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                // Wallhaven API Key input
+                OutlinedTextField(
+                    value = uiState.apiKey,
+                    onValueChange = { viewModel.setApiKey(it) },
+                    leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
+                    label = { Text("Wallhaven API Key") },
+                    placeholder = { Text("Optional for NSFW/Sketchy") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("api_key_input"),
+                    shape = RoundedCornerShape(14.dp)
+                )
+
+                // Local User Folder Picker
+                OutlinedButton(
+                    onClick = { folderPickerLauncher.launch(null) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("select_folder_button"),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        if (uiState.localFolderUri.isNotBlank()) "Save Folder Selected" else "Select Save Folder"
+                    )
+                }
+            }
         }
     }
 }

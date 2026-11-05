@@ -34,9 +34,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.example.data.local.FavoriteWallpaper
 import com.example.ui.WallEViewModel
-import com.example.ui.components.PositionedWallpaperImage
 
 @Composable
 fun FavoritesScreen(
@@ -82,10 +82,10 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        PositionedWallpaperImage(
-            url = favorite.thumbUrl.ifBlank { favorite.url },
-            fallbackUrl = favorite.url,
-            horizontalOffset = favorite.horizontalOffset,
+        AsyncImage(
+            model = favorite.thumbUrl.ifBlank { favorite.url },
+            contentDescription = "Favorite image",
+            contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
 
