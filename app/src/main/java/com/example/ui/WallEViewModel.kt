@@ -92,7 +92,12 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             repository.intervalMinutes.collect { interval -> _uiState.value = _uiState.value.copy(intervalMinutes = interval) }
         }
         viewModelScope.launch {
-            repository.localFolderUri.collect { uri -> _uiState.value = _uiState.value.copy(localFolderUri = uri) }
+            repository.localFolderUri.collect { uri ->
+                _uiState.value = _uiState.value.copy(localFolderUri = uri)
+                if (uri.isNotBlank()) {
+                    repository.syncAndLoadFromSelectedFolder(uri)
+                }
+            }
         }
 
         // Keep current favorite status in sync
@@ -285,6 +290,9 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     fun setLocalFolderUri(uri: String) {
         viewModelScope.launch {
             preferences.setLocalFolderUri(uri)
+            if (uri.isNotBlank()) {
+                repository.syncAndLoadFromSelectedFolder(uri)
+            }
         }
     }
 }

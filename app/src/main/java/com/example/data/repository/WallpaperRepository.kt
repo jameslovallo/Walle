@@ -81,10 +81,12 @@ class WallpaperRepository(
             favoriteDao.deleteById(id)
             false
         } else {
+            // Generate high-performance internal thumbnail in app internal storage
+            val internalThumb = generateInternalThumbnail(id, sourceUri = null, sourceUrl = thumbUrl.ifBlank { url })
             val fav = FavoriteWallpaper(
                 id = id,
                 url = url,
-                thumbUrl = thumbUrl,
+                thumbUrl = internalThumb.ifBlank { thumbUrl },
                 purity = purity,
                 category = category,
                 horizontalOffset = cropOffset,
@@ -108,13 +110,13 @@ class WallpaperRepository(
         if (isFav) {
             favoriteDao.updateCropOffset(id, clamped)
         } else {
-            // "replacing the image that is already saved in favorites, or adding it if it is not a favorite already."
             val current = preferences.currentWallpaperFlow.first()
             if (current.id == id && current.id.isNotBlank()) {
+                val internalThumb = generateInternalThumbnail(id, sourceUri = null, sourceUrl = current.thumbUrl.ifBlank { current.url })
                 val fav = FavoriteWallpaper(
                     id = current.id,
                     url = current.url,
-                    thumbUrl = current.thumbUrl,
+                    thumbUrl = internalThumb.ifBlank { current.thumbUrl },
                     purity = current.purity,
                     category = current.category,
                     horizontalOffset = clamped,
@@ -195,7 +197,6 @@ class WallpaperRepository(
     ): Wallpaper? {
         val apiKey = preferences.apiKeyFlow.first().takeIf { it.isNotBlank() }
 
-        // Categories: "all" -> 111, "anime" -> 010, "people" -> 001
         val categorySelection = if (isNsfw) {
             preferences.nsfwCategoryFlow.first()
         } else {
@@ -207,9 +208,6 @@ class WallpaperRepository(
             else -> "111"
         }
 
-        // Purity:
-        // SFW mode: 100
-        // NSFW mode: sketchy (010), nsfw (001), or both (011)
         val purityCode = if (!isNsfw) {
             "100"
         } else {
@@ -265,6 +263,207 @@ class WallpaperRepository(
         )
     }
 
+    /**
+     * Internal thumbnail storage helper.
+     * Generates and stores thumbnails in the app's internal storage directory,
+     * ensuring high-performance grid loading without polluting or accessing the user's selected folder.
+     */
+    fun getInternalThumbnailFile(id: String): File {
+        val thumbsDir = File(context.filesDir, "favorites_thumbs")
+        if (!thumbsDir.exists()) {
+            thumbsDir.mkdirs()
+        }
+        return File(thumbsDir, "$id.webp")
+    }
+
+    suspend fun generateInternalThumbnail(
+        id: String,
+        sourceUri: Uri?,
+        sourceUrl: String?
+    ): String = withContext(Dispatchers.IO) {
+        val thumbFile = getInternalThumbnailFile(id)
+        if (thumbFile.exists() && thumbFile.length() > 0) {
+            return@withContext Uri.fromFile(thumbFile).toString()
+        }
+
+        try {
+            var bitmap: Bitmap? = null
+
+            // 1. Decode from local document URI if available
+            if (sourceUri != null) {
+                try {
+                    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                        BitmapFactory.decodeStream(input, null, boundsOptions)
+                    }
+
+                    val targetSize = 480
+                    var sampleSize = 1
+                    val maxDim = maxOf(boundsOptions.outWidth, boundsOptions.outHeight)
+                    while (maxDim / (sampleSize * 2) >= targetSize) {
+                        sampleSize *= 2
+                    }
+
+                    val decodeOptions = BitmapFactory.Options().apply {
+                        inSampleSize = sampleSize
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    }
+
+                    context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                        bitmap = BitmapFactory.decodeStream(input, null, decodeOptions)
+                    }
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error decoding local bitmap for thumbnail $id", e)
+                }
+            }
+
+            // 2. Fallback to imageLoader if sourceUrl provided
+            if (bitmap == null && !sourceUrl.isNullOrBlank()) {
+                val request = ImageRequest.Builder(context)
+                    .data(sourceUrl)
+                    .size(480, 800)
+                    .allowHardware(false)
+                    .build()
+                val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
+                bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            }
+
+            val finalBitmap = bitmap
+            if (finalBitmap != null) {
+                FileOutputStream(thumbFile).use { out ->
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        finalBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 85, out)
+                    } else {
+                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                    }
+                }
+                return@withContext Uri.fromFile(thumbFile).toString()
+            }
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Failed to generate internal thumbnail for $id", e)
+        }
+
+        return@withContext sourceUrl ?: ""
+    }
+
+    /**
+     * Loads the existing index.json and wallpaper files from the selected folder into the app.
+     * Thumbnails are generated strictly into the app's internal storage for high performance.
+     */
+    suspend fun syncAndLoadFromSelectedFolder(folderUriString: String) = withContext(Dispatchers.IO) {
+        if (folderUriString.isBlank()) return@withContext
+
+        try {
+            val folderUri = Uri.parse(folderUriString)
+            val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext
+            if (!rootDoc.canRead()) return@withContext
+
+            val indexedItemsMap = mutableMapOf<String, JSONObject>()
+
+            // 1. Read existing index.json if present
+            val indexFile = rootDoc.findFile("index.json")
+            if (indexFile != null && indexFile.exists()) {
+                try {
+                    val jsonString = context.contentResolver.openInputStream(indexFile.uri)?.use { stream ->
+                        stream.bufferedReader().use { it.readText() }
+                    }
+                    if (!jsonString.isNullOrBlank()) {
+                        val rootJson = JSONObject(jsonString)
+                        val array = rootJson.optJSONArray("wallpapers")
+                        if (array != null) {
+                            for (i in 0 until array.length()) {
+                                val item = array.getJSONObject(i)
+                                val id = item.optString("id")
+                                if (id.isNotBlank()) {
+                                    indexedItemsMap[id] = item
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error parsing existing index.json", e)
+                }
+            }
+
+            // 2. Scan subdirectories: sfw, nsfw, and root
+            val dirsToScan = listOf(
+                rootDoc.findFile("sfw") to "sfw",
+                rootDoc.findFile("nsfw") to "nsfw",
+                rootDoc to "sfw"
+            )
+
+            val discoveredFiles = mutableMapOf<String, Pair<DocumentFile, String>>()
+
+            for ((dir, defaultPurity) in dirsToScan) {
+                if (dir == null || !dir.exists() || !dir.isDirectory) continue
+                for (file in dir.listFiles()) {
+                    if (file.isDirectory) continue
+                    val name = file.name ?: continue
+                    if (name.equals("index.json", ignoreCase = true)) continue
+                    val lower = name.lowercase()
+                    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp")) {
+                        val baseId = name.substringBeforeLast('.')
+                        val id = if (baseId.startsWith("wallhaven-", ignoreCase = true)) {
+                            baseId.substringAfter("wallhaven-")
+                        } else {
+                            baseId
+                        }
+                        if (!discoveredFiles.containsKey(id)) {
+                            discoveredFiles[id] = file to defaultPurity
+                        }
+                    }
+                }
+            }
+
+            // 3. Process each item:
+            // Combine items from index.json and scanned files
+            val allIds = (indexedItemsMap.keys + discoveredFiles.keys).distinct()
+
+            for (id in allIds) {
+                val indexJson = indexedItemsMap[id]
+                val localFileInfo = discoveredFiles[id]
+
+                val purity = indexJson?.optString("purity")
+                    ?: localFileInfo?.second
+                    ?: "sfw"
+                val category = indexJson?.optString("category") ?: "all"
+                val horizontalOffset = indexJson?.optDouble("horizontalOffset", 0.5)?.toFloat() ?: 0.5f
+                val timestamp = indexJson?.optLong("timestamp", System.currentTimeMillis()) ?: System.currentTimeMillis()
+                val url = indexJson?.optString("url")
+                    ?: localFileInfo?.first?.uri?.toString()
+                    ?: "https://w.wallhaven.cc/full/${id.take(2)}/wallhaven-$id.jpg"
+
+                val localFileUri = localFileInfo?.first?.uri
+
+                // Generate high-performance thumbnail stored in internal storage
+                val internalThumb = generateInternalThumbnail(
+                    id = id,
+                    sourceUri = localFileUri,
+                    sourceUrl = url
+                )
+
+                val fav = FavoriteWallpaper(
+                    id = id,
+                    url = url,
+                    thumbUrl = internalThumb.ifBlank { localFileUri?.toString() ?: url },
+                    purity = purity,
+                    category = category,
+                    horizontalOffset = horizontalOffset,
+                    addedTimestamp = timestamp,
+                    localFilePath = localFileUri?.toString()
+                )
+
+                favoriteDao.insertFavorite(fav)
+            }
+
+            // 4. Update/refresh index.json in the user folder so it reflects all favorites
+            updateFolderMetadataIndex(rootDoc)
+            notifyWallpaperChanged()
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error syncing and loading from selected folder", e)
+        }
+    }
+
     suspend fun saveWallpaperToLocalFolder(fav: FavoriteWallpaper) = withContext(Dispatchers.IO) {
         val folderUriString = preferences.localFolderUriFlow.first()
         if (folderUriString.isBlank()) return@withContext
@@ -285,16 +484,29 @@ class WallpaperRepository(
             val mimeType = if (isPng) "image/png" else "image/jpeg"
             val fileName = "${fav.id}$extension"
 
-            if (subDir.findFile(fileName) == null) {
-                val newFile = subDir.createFile(mimeType, fileName) ?: return@withContext
-                // Stream the original untouched full-resolution file from wallhaven
-                val request = Request.Builder().url(fav.url).build()
-                val response = NetworkClient.okHttpClient.newCall(request).execute()
-                response.body?.byteStream()?.use { inputStream ->
-                    context.contentResolver.openOutputStream(newFile.uri)?.use { outStream ->
-                        inputStream.copyTo(outStream)
+            var targetFile = subDir.findFile(fileName)
+            if (targetFile == null) {
+                targetFile = subDir.createFile(mimeType, fileName)
+                if (targetFile != null) {
+                    // Stream the original untouched full-resolution file from wallhaven
+                    val request = Request.Builder().url(fav.url).build()
+                    val response = NetworkClient.okHttpClient.newCall(request).execute()
+                    response.body?.byteStream()?.use { inputStream ->
+                        context.contentResolver.openOutputStream(targetFile.uri)?.use { outStream ->
+                            inputStream.copyTo(outStream)
+                        }
                     }
                 }
+            }
+
+            // Generate/cache internal thumbnail in app internal storage (not in user folder)
+            val internalThumb = generateInternalThumbnail(
+                id = fav.id,
+                sourceUri = targetFile?.uri,
+                sourceUrl = fav.url
+            )
+            if (internalThumb.isNotBlank() && internalThumb != fav.thumbUrl) {
+                favoriteDao.insertFavorite(fav.copy(thumbUrl = internalThumb, localFilePath = targetFile?.uri?.toString()))
             }
 
             // Update metadata index.json in the root folder
