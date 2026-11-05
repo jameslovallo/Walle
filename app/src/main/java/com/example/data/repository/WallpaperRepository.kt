@@ -80,9 +80,14 @@ class WallpaperRepository(
         if (id.isBlank()) return@withContext false
         val exists = favoriteDao.isFavoriteDirect(id)
         if (exists) {
-            favoriteDao.deleteById(id)
+            // Unfavoriting acts exactly the same as deleting the favorite:
+            // purge file, remove from index.json, cache, and record in deleted list
+            deleteFavorite(id)
             false
         } else {
+            // Un-delete if previously deleted
+            preferences.removeDeletedWallpaperId(id)
+
             // Generate high-performance internal thumbnail in app internal storage
             val internalThumb = generateInternalThumbnail(id, sourceUri = null, sourceUrl = thumbUrl.ifBlank { url })
             val fav = FavoriteWallpaper(
@@ -170,6 +175,19 @@ class WallpaperRepository(
         val isFav = favoriteDao.isFavoriteDirect(id)
         if (isFav) {
             favoriteDao.updateCropOffset(id, clamped)
+            // Keep index.json in user folder in sync with updated positioning
+            val folderUriString = preferences.localFolderUriFlow.first()
+            if (folderUriString.isNotBlank()) {
+                try {
+                    val folderUri = Uri.parse(folderUriString)
+                    val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
+                    if (rootDoc != null && rootDoc.exists() && rootDoc.canWrite()) {
+                        updateFolderMetadataIndex(rootDoc)
+                    }
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error updating index.json on offset update", e)
+                }
+            }
         } else {
             val current = preferences.currentWallpaperFlow.first()
             if (current.id == id && current.id.isNotBlank()) {

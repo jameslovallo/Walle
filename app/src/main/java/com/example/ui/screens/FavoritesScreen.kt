@@ -82,6 +82,9 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
+        val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
+        val biasX = (effectiveOffset * 2f - 1f)
+
         AsyncImage(
             model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
                 .data(favorite.thumbUrl.ifBlank { favorite.url })
@@ -89,6 +92,7 @@ fun FavoriteCard(
                 .build(),
             contentDescription = "Favorite image",
             contentScale = ContentScale.Crop,
+            alignment = androidx.compose.ui.BiasAlignment(biasX, 0f),
             modifier = Modifier.fillMaxSize()
         )
 
