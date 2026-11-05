@@ -20,15 +20,22 @@ class WallpaperIntervalWorker(
         val repository = app.repository
         val preferences = app.preferences
 
+        val isScheduleEnabled = preferences.isScheduleEnabledFlow.first()
+        if (!isScheduleEnabled) {
+            return Result.success()
+        }
+
         try {
             repository.fetchAndApplyNextWallpaper()
         } catch (e: Exception) {
             // Keep going
         }
 
-        // Reschedule next cycle
-        val intervalMinutes = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
-        scheduleNext(applicationContext, intervalMinutes)
+        // Reschedule next cycle only if schedule is still enabled
+        if (preferences.isScheduleEnabledFlow.first()) {
+            val intervalMinutes = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
+            scheduleNext(applicationContext, intervalMinutes)
+        }
 
         return Result.success()
     }

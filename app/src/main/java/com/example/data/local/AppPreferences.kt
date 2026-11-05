@@ -57,6 +57,17 @@ class AppPreferences(private val context: Context) {
         val KEY_CURRENT_CATEGORY = stringPreferencesKey("current_category")
         val KEY_CURRENT_OFFSET = floatPreferencesKey("current_offset")
         val KEY_CURRENT_TAGS = stringPreferencesKey("current_tags")
+
+        val KEY_DELETED_WALLPAPER_IDS = stringSetPreferencesKey("deleted_wallpaper_ids")
+        val KEY_IS_SCHEDULE_ENABLED = booleanPreferencesKey("is_schedule_enabled")
+    }
+
+    val isScheduleEnabledFlow: Flow<Boolean> = context.dataStore.data.map {
+        it[KEY_IS_SCHEDULE_ENABLED] ?: true
+    }
+
+    val deletedWallpaperIdsFlow: Flow<Set<String>> = context.dataStore.data.map {
+        it[KEY_DELETED_WALLPAPER_IDS] ?: emptySet()
     }
 
     val isNsfwModeFlow: Flow<Boolean> = context.dataStore.data.map {
@@ -230,6 +241,27 @@ class AppPreferences(private val context: Context) {
     suspend fun updateCurrentWallpaperOffset(offset: Float) {
         context.dataStore.edit {
             it[KEY_CURRENT_OFFSET] = offset
+        }
+    }
+
+    suspend fun setScheduleEnabled(enabled: Boolean) {
+        context.dataStore.edit {
+            it[KEY_IS_SCHEDULE_ENABLED] = enabled
+        }
+    }
+
+    suspend fun addDeletedWallpaperId(id: String) {
+        if (id.isBlank()) return
+        context.dataStore.edit {
+            val current = it[KEY_DELETED_WALLPAPER_IDS] ?: emptySet()
+            it[KEY_DELETED_WALLPAPER_IDS] = current + id
+        }
+    }
+
+    suspend fun removeDeletedWallpaperId(id: String) {
+        context.dataStore.edit {
+            val current = it[KEY_DELETED_WALLPAPER_IDS] ?: emptySet()
+            it[KEY_DELETED_WALLPAPER_IDS] = current - id
         }
     }
 }

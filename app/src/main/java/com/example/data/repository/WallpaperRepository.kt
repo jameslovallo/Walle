@@ -103,7 +103,65 @@ class WallpaperRepository(
     }
 
     suspend fun deleteFavorite(id: String) = withContext(Dispatchers.IO) {
+        if (id.isBlank()) return@withContext
+
+        // 1. Add to permanent deleted list to avoid re-circulation from Wallhaven or folder sync
+        preferences.addDeletedWallpaperId(id)
+
+        // 2. Remove from Room DB
         favoriteDao.deleteById(id)
+
+        // 3. Remove internal thumbnail
+        try {
+            val thumbFile = getInternalThumbnailFile(id)
+            if (thumbFile.exists()) {
+                thumbFile.delete()
+            }
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error deleting thumbnail for $id", e)
+        }
+
+        // 4. Remove physical file from user folder (sfw/, nsfw/, root) if folder is configured
+        val folderUriString = preferences.localFolderUriFlow.first()
+        if (folderUriString.isNotBlank()) {
+            try {
+                val folderUri = Uri.parse(folderUriString)
+                val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
+                if (rootDoc != null && rootDoc.exists() && rootDoc.canWrite()) {
+                    val subDirs = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
+                    for (dir in subDirs) {
+                        if (dir.exists() && dir.isDirectory) {
+                            for (f in dir.listFiles()) {
+                                val name = f.name ?: continue
+                                val base = name.substringBeforeLast('.')
+                                val cleanId = if (base.startsWith("wallhaven-", ignoreCase = true)) {
+                                    base.substringAfter("wallhaven-")
+                                } else {
+                                    base
+                                }
+                                if (cleanId.equals(id, ignoreCase = true)) {
+                                    f.delete()
+                                }
+                            }
+                        }
+                    }
+                    // Update index.json to purge deleted item
+                    updateFolderMetadataIndex(rootDoc)
+                }
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Error deleting file from local folder for $id", e)
+            }
+        }
+
+        // 5. If this deleted item is currently active on screen, immediately advance to the next wallpaper
+        val current = preferences.currentWallpaperFlow.first()
+        if (current.id == id) {
+            try {
+                fetchAndApplyNextWallpaper()
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Error advancing wallpaper after deleting current", e)
+            }
+        }
     }
 
     suspend fun updateCropOffset(id: String, offset: Float) = withContext(Dispatchers.IO) {
@@ -180,6 +238,8 @@ class WallpaperRepository(
             val isNsfw = preferences.isNsfwModeFlow.first()
             val tags = if (isNsfw) preferences.nsfwTagsFlow.first() else preferences.sfwTagsFlow.first()
             val existingIds = favoriteDao.getAllFavoriteIds().toSet()
+            val deletedIds = preferences.deletedWallpaperIdsFlow.first()
+            val excludedIds = existingIds + deletedIds
 
             var candidateWallpaper: Wallpaper? = null
 
@@ -187,7 +247,7 @@ class WallpaperRepository(
                 // If no tag is selected, shuffled photos saved from favorites
                 val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
                 val randomFav = favoriteDao.getRandomFavorite(purities)
-                if (randomFav != null) {
+                if (randomFav != null && randomFav.id !in deletedIds) {
                     val finalOffset = if (randomFav.horizontalOffset in 0f..1f) {
                         randomFav.horizontalOffset
                     } else {
@@ -216,7 +276,7 @@ class WallpaperRepository(
 
             if (candidateWallpaper == null) {
                 // Query Wallhaven API (New image!)
-                val fetched = fetchFromWallhaven(isNsfw, tags, existingIds)
+                val fetched = fetchFromWallhaven(isNsfw, tags, excludedIds)
                 if (fetched != null) {
                     // 1) When a new image is loaded: detect face and position to the right side of the screen
                     // Apply positioning BEFORE setting the image to prevent jank
@@ -440,7 +500,7 @@ class WallpaperRepository(
                         BitmapFactory.decodeStream(input, null, boundsOptions)
                     }
 
-                    val targetSize = 480
+                    val targetSize = 720
                     var sampleSize = 1
                     val maxDim = maxOf(boundsOptions.outWidth, boundsOptions.outHeight)
                     while (maxDim / (sampleSize * 2) >= targetSize) {
@@ -464,7 +524,7 @@ class WallpaperRepository(
             if (bitmap == null && !sourceUrl.isNullOrBlank()) {
                 val request = ImageRequest.Builder(context)
                     .data(sourceUrl)
-                    .size(480, 800)
+                    .size(720, 1280)
                     .allowHardware(false)
                     .build()
                 val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
@@ -475,9 +535,9 @@ class WallpaperRepository(
             if (finalBitmap != null) {
                 FileOutputStream(thumbFile).use { out ->
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                        finalBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 85, out)
+                        finalBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 92, out)
                     } else {
-                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
                     }
                 }
                 return@withContext Uri.fromFile(thumbFile).toString()
@@ -561,8 +621,9 @@ class WallpaperRepository(
             }
 
             // 3. Process each item:
-            // Combine items from index.json and scanned files
-            val allIds = (indexedItemsMap.keys + discoveredFiles.keys).distinct()
+            // Combine items from index.json and scanned files, skipping permanently deleted items
+            val deletedIds = preferences.deletedWallpaperIdsFlow.first()
+            val allIds = (indexedItemsMap.keys + discoveredFiles.keys).distinct().filter { it !in deletedIds }
 
             for (id in allIds) {
                 val indexJson = indexedItemsMap[id]

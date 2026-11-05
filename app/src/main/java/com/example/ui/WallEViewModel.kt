@@ -33,7 +33,8 @@ data class WallEUIState(
     val nsfwFilters: ModeFilterSettings = ModeFilterSettings(),
     val apiKey: String = "",
     val intervalMinutes: Int = 60,
-    val localFolderUri: String = ""
+    val localFolderUri: String = "",
+    val isScheduleEnabled: Boolean = true
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -97,6 +98,12 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 if (uri.isNotBlank()) {
                     repository.syncAndLoadFromSelectedFolder(uri)
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            preferences.isScheduleEnabledFlow.collect { enabled ->
+                _uiState.value = _uiState.value.copy(isScheduleEnabled = enabled)
             }
         }
 
@@ -243,7 +250,22 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     fun applyFavoriteAsCurrent(fav: FavoriteWallpaper) {
         viewModelScope.launch {
+            // Tapping a favorite applies it as the current wallpaper and disables the schedule until re-enabled
+            preferences.setScheduleEnabled(false)
+            WallpaperIntervalWorker.cancel(app)
             repository.applyFavorite(fav)
+        }
+    }
+
+    fun setScheduleEnabled(enabled: Boolean, context: Context) {
+        viewModelScope.launch {
+            preferences.setScheduleEnabled(enabled)
+            if (enabled) {
+                val interval = _uiState.value.intervalMinutes.coerceAtLeast(1)
+                WallpaperIntervalWorker.scheduleNext(context, interval)
+            } else {
+                WallpaperIntervalWorker.cancel(context)
+            }
         }
     }
 
@@ -275,6 +297,8 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setIntervalMinutes(context: Context, minutes: Int) {
         viewModelScope.launch {
+            // Changing or setting an interval also re-enables the automatic schedule
+            preferences.setScheduleEnabled(true)
             preferences.setIntervalMinutes(minutes)
             WallpaperIntervalWorker.scheduleNext(context, minutes)
         }

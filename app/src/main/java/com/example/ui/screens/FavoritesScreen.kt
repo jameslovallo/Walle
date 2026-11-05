@@ -46,7 +46,7 @@ fun FavoritesScreen(
     val favorites by viewModel.favorites.collectAsState()
 
     LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
+        columns = GridCells.Adaptive(minSize = 160.dp),
         contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -83,7 +83,10 @@ fun FavoriteCard(
             .testTag("favorite_card_${favorite.id}")
     ) {
         AsyncImage(
-            model = favorite.thumbUrl.ifBlank { favorite.url },
+            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                .data(favorite.thumbUrl.ifBlank { favorite.url })
+                .crossfade(true)
+                .build(),
             contentDescription = "Favorite image",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()

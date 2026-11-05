@@ -160,6 +160,35 @@ fun SettingsScreen(
                     Text("Set Live Wallpaper")
                 }
 
+                // Automatic Schedule Status & Toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Automatic Schedule",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (uiState.isScheduleEnabled) "Active" else "Paused (Favorite applied)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (uiState.isScheduleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = uiState.isScheduleEnabled,
+                        onCheckedChange = { enabled ->
+                            viewModel.setScheduleEnabled(enabled, context)
+                        },
+                        modifier = Modifier.testTag("schedule_switch")
+                    )
+                }
+
                 // Interval dropdown
                 ExposedDropdownMenuBox(
                     expanded = intervalExpanded,
