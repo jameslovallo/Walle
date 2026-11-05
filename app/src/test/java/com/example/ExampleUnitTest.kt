@@ -87,4 +87,20 @@ class ExampleUnitTest {
         val faceScreenFraction = (faceCenterX - visibleLeft) / visibleWidthInImage
         assertEquals(0.70f, faceScreenFraction, 0.01f)
     }
+
+    @Test
+    fun `test current wallpaper tags parsing`() {
+        val rawTags = "anime, fantasy, landscape, cyberpunk"
+        val parsed = rawTags.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        assertEquals(4, parsed.size)
+        assertEquals("anime", parsed[0])
+        assertEquals("cyberpunk", parsed[3])
+
+        val info = com.example.data.local.CurrentWallpaperInfo(
+            id = "w101",
+            tags = parsed
+        )
+        assertEquals(4, info.tags.size)
+        assertTrue(info.tags.contains("landscape"))
+    }
 }

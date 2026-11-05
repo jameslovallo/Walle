@@ -74,7 +74,8 @@ class WallpaperRepository(
         thumbUrl: String,
         purity: String,
         category: String,
-        cropOffset: Float
+        cropOffset: Float,
+        tags: List<String> = emptyList()
     ): Boolean = withContext(Dispatchers.IO) {
         if (id.isBlank()) return@withContext false
         val exists = favoriteDao.isFavoriteDirect(id)
@@ -91,7 +92,8 @@ class WallpaperRepository(
                 purity = purity,
                 category = category,
                 horizontalOffset = cropOffset,
-                addedTimestamp = System.currentTimeMillis()
+                addedTimestamp = System.currentTimeMillis(),
+                tags = tags.joinToString(",")
             )
             favoriteDao.insertFavorite(fav)
             // Save to local user folder if configured
@@ -121,7 +123,8 @@ class WallpaperRepository(
                     purity = current.purity,
                     category = current.category,
                     horizontalOffset = clamped,
-                    addedTimestamp = System.currentTimeMillis()
+                    addedTimestamp = System.currentTimeMillis(),
+                    tags = current.tags.joinToString(",")
                 )
                 favoriteDao.insertFavorite(fav)
                 saveWallpaperToLocalFolder(fav)
@@ -147,13 +150,20 @@ class WallpaperRepository(
             detected
         }
 
+        val favTags = if (fav.tags.isNotBlank()) {
+            fav.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        } else {
+            emptyList()
+        }
+
         preferences.setCurrentWallpaper(
             id = fav.id,
             url = fav.url,
             thumbUrl = fav.thumbUrl,
             purity = fav.purity,
             category = fav.category,
-            offset = finalOffset
+            offset = finalOffset,
+            tags = favTags
         )
         notifyWallpaperChanged()
     }
@@ -185,6 +195,11 @@ class WallpaperRepository(
                         favoriteDao.updateCropOffset(randomFav.id, detected)
                         detected
                     }
+                    val favTags = if (randomFav.tags.isNotBlank()) {
+                        randomFav.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                    } else {
+                        emptyList()
+                    }
                     candidateWallpaper = Wallpaper(
                         id = randomFav.id,
                         fullUrl = randomFav.url,
@@ -193,7 +208,8 @@ class WallpaperRepository(
                         category = randomFav.category,
                         resolution = randomFav.resolution,
                         horizontalOffset = finalOffset,
-                        isFavorite = true
+                        isFavorite = true,
+                        tags = favTags
                     )
                 }
             }
@@ -210,14 +226,15 @@ class WallpaperRepository(
             }
 
             if (candidateWallpaper != null) {
-                // Update current wallpaper state with final pre-calculated offset
+                // Update current wallpaper state with final pre-calculated offset and tags
                 preferences.setCurrentWallpaper(
                     id = candidateWallpaper.id,
                     url = candidateWallpaper.fullUrl,
                     thumbUrl = candidateWallpaper.thumbUrl,
                     purity = candidateWallpaper.purity,
                     category = candidateWallpaper.category,
-                    offset = candidateWallpaper.horizontalOffset
+                    offset = candidateWallpaper.horizontalOffset,
+                    tags = candidateWallpaper.tags
                 )
 
                 // Broadcast update event to Live Wallpaper
@@ -294,6 +311,18 @@ class WallpaperRepository(
         val fullUrl = item.path.ifBlank { item.url }
         val thumb = item.thumbs?.large ?: item.thumbs?.original ?: item.thumbs?.small ?: fullUrl
 
+        val directTags = item.tags?.map { it.name } ?: emptyList()
+        val tags = if (directTags.isNotEmpty()) {
+            directTags
+        } else {
+            try {
+                val detail = apiService.getWallpaperDetails(item.id, apiKey)
+                detail.data?.tags?.map { it.name } ?: emptyList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
         return Wallpaper(
             id = item.id,
             fullUrl = fullUrl,
@@ -302,7 +331,8 @@ class WallpaperRepository(
             category = item.category,
             resolution = item.resolution,
             horizontalOffset = 0.5f,
-            isFavorite = false
+            isFavorite = false,
+            tags = tags
         )
     }
 

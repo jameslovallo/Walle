@@ -229,7 +229,8 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 thumbUrl = current.thumbUrl,
                 purity = current.purity,
                 category = current.category,
-                cropOffset = current.horizontalOffset
+                cropOffset = current.horizontalOffset,
+                tags = current.tags
             )
         }
     }

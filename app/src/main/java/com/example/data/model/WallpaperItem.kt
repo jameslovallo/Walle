@@ -9,6 +9,28 @@ data class WallhavenSearchResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class WallhavenDetailResponse(
+    @Json(name = "data") val data: WallhavenDetailItem? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class WallhavenDetailItem(
+    @Json(name = "id") val id: String = "",
+    @Json(name = "url") val url: String = "",
+    @Json(name = "path") val path: String = "",
+    @Json(name = "purity") val purity: String = "sfw",
+    @Json(name = "category") val category: String = "general",
+    @Json(name = "tags") val tags: List<WallhavenTagItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class WallhavenTagItem(
+    @Json(name = "id") val id: Int = 0,
+    @Json(name = "name") val name: String = "",
+    @Json(name = "purity") val purity: String = ""
+)
+
+@JsonClass(generateAdapter = true)
 data class WallhavenImageItem(
     @Json(name = "id") val id: String,
     @Json(name = "url") val url: String = "",
@@ -17,7 +39,8 @@ data class WallhavenImageItem(
     @Json(name = "category") val category: String = "general", // "general", "anime", "people"
     @Json(name = "resolution") val resolution: String = "",
     @Json(name = "ratio") val ratio: String = "",
-    @Json(name = "thumbs") val thumbs: ThumbsItem? = null
+    @Json(name = "thumbs") val thumbs: ThumbsItem? = null,
+    @Json(name = "tags") val tags: List<WallhavenTagItem>? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -35,7 +58,8 @@ data class Wallpaper(
     val category: String,
     val resolution: String,
     val horizontalOffset: Float = 0.5f,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val tags: List<String> = emptyList()
 )
 
 data class ModeFilterSettings(

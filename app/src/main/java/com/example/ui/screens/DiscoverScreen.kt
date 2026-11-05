@@ -2,8 +2,11 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -15,12 +18,12 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,13 +32,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -65,6 +66,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.example.data.model.WallhavenTags
@@ -85,20 +87,12 @@ fun DiscoverScreen(
     var tagInputText by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
 
+    val currentImageTags = uiState.currentWallpaper.tags
+    val hasImageTags = currentImageTags.isNotEmpty()
+
     val autocompleteSuggestions = remember(tagInputText, savedTags) {
         if (tagInputText.isNotBlank()) {
             WallhavenTags.getAutocompleteSuggestions(tagInputText, savedTags, limit = 6)
-        } else {
-            emptyList()
-        }
-    }
-
-    val similarSuggestions = remember(tagInputText, activeTags, savedTags) {
-        if (tagInputText.isNotBlank()) {
-            val queryTags = setOf(tagInputText.trim().lowercase())
-            WallhavenTags.getSimilarTags(queryTags, savedTags, limit = 5)
-        } else if (activeTags.isNotEmpty()) {
-            WallhavenTags.getSimilarTags(activeTags, savedTags, limit = 6)
         } else {
             emptyList()
         }
@@ -116,70 +110,155 @@ fun DiscoverScreen(
                 .padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Compact Main Preview Card in device aspect ratio with direct drag positioning
+            // Preview & Current Image Tags Section
+            // When tags are present in API response, slide preview card to the left and display tags grid to the right
             val currentOffset = uiState.currentWallpaper.horizontalOffset
             var dragOffset by remember(currentOffset) { mutableFloatStateOf(currentOffset) }
 
-            Box(
+            Row(
                 modifier = Modifier
+                    .fillMaxWidth()
                     .height(270.dp)
-                    .aspectRatio(9f / 18.5f)
-                    .shadow(8.dp, RoundedCornerShape(22.dp))
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .testTag("wallpaper_preview_card")
+                    .animateContentSize(),
+                horizontalArrangement = if (hasImageTags) Arrangement.Start else Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                val url = uiState.currentWallpaper.url
-                if (url.isNotBlank()) {
-                    PositionedWallpaperImage(
-                        url = url,
-                        horizontalOffset = dragOffset,
-                        fallbackUrl = uiState.currentWallpaper.thumbUrl,
-                        onDrag = { newOffset ->
-                            dragOffset = newOffset
-                            viewModel.updateDragOffset(newOffset)
-                        },
-                        onDragEnd = {
-                            viewModel.commitDragOffset(dragOffset)
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                // Fixed-aspect-ratio Preview Card (with direct horizontal drag positioning)
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .aspectRatio(9f / 18.5f)
+                        .shadow(8.dp, RoundedCornerShape(22.dp))
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .testTag("wallpaper_preview_card")
+                ) {
+                    val url = uiState.currentWallpaper.url
+                    if (url.isNotBlank()) {
+                        PositionedWallpaperImage(
+                            url = url,
+                            horizontalOffset = dragOffset,
+                            fallbackUrl = uiState.currentWallpaper.thumbUrl,
+                            onDrag = { newOffset ->
+                                dragOffset = newOffset
+                                viewModel.updateDragOffset(newOffset)
+                            },
+                            onDragEnd = {
+                                viewModel.commitDragOffset(dragOffset)
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
-                if (uiState.isLoading) {
-                    Box(
+                    if (uiState.isLoading) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.35f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                    }
+
+                    // Hovering Bottom-Right: Heart button with dynamic state
+                    val heartContainerColor by animateColorAsState(
+                        targetValue = if (uiState.isCurrentFavorite) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
+                        label = "heart_color"
+                    )
+                    IconButton(
+                        onClick = { viewModel.toggleCurrentFavorite() },
                         modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.35f)),
-                        contentAlignment = Alignment.Center
+                            .align(Alignment.BottomEnd)
+                            .padding(10.dp)
+                            .size(42.dp)
+                            .background(heartContainerColor, CircleShape)
+                            .testTag("favorite_toggle_button"),
+                        colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
                     ) {
-                        CircularProgressIndicator(
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(36.dp)
+                        Icon(
+                            imageVector = if (uiState.isCurrentFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorite",
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
 
-                // Hovering Bottom-Right: Heart button with dynamic state
-                val heartContainerColor by animateColorAsState(
-                    targetValue = if (uiState.isCurrentFavorite) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
-                    label = "heart_color"
-                )
-                IconButton(
-                    onClick = { viewModel.toggleCurrentFavorite() },
+                // Grid of tags for current image to the right (displayed when tags present in API response)
+                AnimatedVisibility(
+                    visible = hasImageTags,
+                    enter = fadeIn() + expandHorizontally(),
+                    exit = fadeOut() + shrinkHorizontally(),
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(10.dp)
-                        .size(42.dp)
-                        .background(heartContainerColor, CircleShape)
-                        .testTag("favorite_toggle_button"),
-                    colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+                        .fillMaxHeight()
+                        .weight(1f)
                 ) {
-                    Icon(
-                        imageVector = if (uiState.isCurrentFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = "Favorite",
-                        modifier = Modifier.size(22.dp)
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tag,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Tags",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        FlowRow(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .testTag("current_image_tags_grid"),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            currentImageTags.forEach { imgTag ->
+                                val isAlreadyActive = activeTags.contains(imgTag.lowercase())
+                                SuggestionChip(
+                                    onClick = {
+                                        viewModel.addTag(imgTag)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = imgTag,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        containerColor = if (isAlreadyActive) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceContainerHigh
+                                        },
+                                        labelColor = if (isAlreadyActive) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        }
+                                    ),
+                                    modifier = Modifier.testTag("current_image_tag_$imgTag")
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -229,7 +308,7 @@ fun DiscoverScreen(
                     .testTag("add_tag_text_input")
             )
 
-            // Autocomplete suggestions from Wallhaven
+            // Autocomplete suggestions from Wallhaven while typing
             AnimatedVisibility(
                 visible = autocompleteSuggestions.isNotEmpty(),
                 enter = fadeIn(),
@@ -262,49 +341,9 @@ fun DiscoverScreen(
                 }
             }
 
-            // Similar Wallhaven tags suggestions
-            AnimatedVisibility(
-                visible = similarSuggestions.isNotEmpty(),
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        similarSuggestions.forEach { similarTag ->
-                            AssistChip(
-                                onClick = {
-                                    viewModel.addTag(similarTag)
-                                    tagInputText = ""
-                                    focusManager.clearFocus()
-                                },
-                                label = { Text(similarTag) },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.AutoAwesome,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                },
-                                colors = AssistChipDefaults.assistChipColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                    labelColor = MaterialTheme.colorScheme.onSurface
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.testTag("similar_$similarTag")
-                            )
-                        }
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Grid of tags with 'x' button on each tag to remove from list
+            // Grid of saved search tags with 'x' button on each tag to remove from list
             FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()

@@ -1,7 +1,9 @@
 package com.example.data.api
 
+import com.example.data.model.WallhavenDetailResponse
 import com.example.data.model.WallhavenSearchResponse
 import retrofit2.http.GET
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface WallhavenApiService {
@@ -13,4 +15,10 @@ interface WallhavenApiService {
         @Query("sorting") sorting: String = "random",
         @Query("apikey") apiKey: String? = null
     ): WallhavenSearchResponse
+
+    @GET("api/v1/w/{id}")
+    suspend fun getWallpaperDetails(
+        @Path("id") id: String,
+        @Query("apikey") apiKey: String? = null
+    ): WallhavenDetailResponse
 }

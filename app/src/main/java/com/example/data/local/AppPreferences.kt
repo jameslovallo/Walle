@@ -56,6 +56,7 @@ class AppPreferences(private val context: Context) {
         val KEY_CURRENT_PURITY = stringPreferencesKey("current_purity")
         val KEY_CURRENT_CATEGORY = stringPreferencesKey("current_category")
         val KEY_CURRENT_OFFSET = floatPreferencesKey("current_offset")
+        val KEY_CURRENT_TAGS = stringPreferencesKey("current_tags")
     }
 
     val isNsfwModeFlow: Flow<Boolean> = context.dataStore.data.map {
@@ -124,13 +125,20 @@ class AppPreferences(private val context: Context) {
     }
 
     val currentWallpaperFlow: Flow<CurrentWallpaperInfo> = context.dataStore.data.map {
+        val rawTags = it[KEY_CURRENT_TAGS] ?: ""
+        val tagsList = if (rawTags.isNotBlank()) {
+            rawTags.split(",").map { t -> t.trim() }.filter { t -> t.isNotBlank() }
+        } else {
+            emptyList()
+        }
         CurrentWallpaperInfo(
             id = it[KEY_CURRENT_ID] ?: "",
             url = it[KEY_CURRENT_URL] ?: "",
             thumbUrl = it[KEY_CURRENT_THUMB] ?: "",
             purity = it[KEY_CURRENT_PURITY] ?: "sfw",
             category = it[KEY_CURRENT_CATEGORY] ?: "general",
-            horizontalOffset = it[KEY_CURRENT_OFFSET] ?: 0.5f
+            horizontalOffset = it[KEY_CURRENT_OFFSET] ?: 0.5f,
+            tags = tagsList
         )
     }
 
@@ -205,7 +213,8 @@ class AppPreferences(private val context: Context) {
         thumbUrl: String,
         purity: String,
         category: String,
-        offset: Float
+        offset: Float,
+        tags: List<String> = emptyList()
     ) {
         context.dataStore.edit {
             it[KEY_CURRENT_ID] = id
@@ -214,6 +223,7 @@ class AppPreferences(private val context: Context) {
             it[KEY_CURRENT_PURITY] = purity
             it[KEY_CURRENT_CATEGORY] = category
             it[KEY_CURRENT_OFFSET] = offset
+            it[KEY_CURRENT_TAGS] = tags.joinToString(",")
         }
     }
 
@@ -230,5 +240,6 @@ data class CurrentWallpaperInfo(
     val thumbUrl: String = "",
     val purity: String = "sfw",
     val category: String = "general",
-    val horizontalOffset: Float = 0.5f
+    val horizontalOffset: Float = 0.5f,
+    val tags: List<String> = emptyList()
 )
