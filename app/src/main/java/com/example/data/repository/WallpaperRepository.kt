@@ -41,6 +41,33 @@ class WallpaperRepository(
     private val positioningPrefs = context.getSharedPreferences("walle_positioning_cache", Context.MODE_PRIVATE)
     private val memoryOffsetCache = java.util.concurrent.ConcurrentHashMap<String, Float>()
 
+    companion object {
+        /**
+         * Builds the Wallhaven `q` query from a raw search string so that
+         * all relevant results are fetched.
+         *
+         * Every term is included as a plain tag joined with a single space.
+         * No `+` (must-have) or `-` (exclude) operators are kept: those
+         * narrow the result set. Terms are normalized (split on comma or
+         * whitespace, operator prefixes stripped, lowercased, blank/deduped)
+         * and empty input returns null so Wallhaven serves its broad listing.
+         */
+        fun buildWallhavenQuery(query: String?): String? {
+            return buildWallhavenQuery(query.orEmpty().split(',', ' '))
+        }
+
+        /** Builds the Wallhaven `q` query from a list of tags. See [buildWallhavenQuery]. */
+        fun buildWallhavenQuery(terms: List<String>): String? {
+            val cleaned = terms
+                .flatMap { it.split(',', ' ') }
+                .map { it.trim().trimStart('+', '-') }
+                .map { it.lowercase() }
+                .filter { it.isNotBlank() }
+                .distinct()
+            return if (cleaned.isEmpty()) null else cleaned.joinToString(" ")
+        }
+    }
+
     fun getCachedOffset(id: String): Float? {
         if (id.isBlank()) return null
         memoryOffsetCache[id]?.let { return it }
@@ -364,15 +391,16 @@ class WallpaperRepository(
             }
         }
 
-        val cleanQuery = query?.trim()?.takeIf { it.isNotBlank() }
+        val wallhavenQuery = buildWallhavenQuery(query)
 
         try {
             val response = kotlinx.coroutines.withTimeout(8000L) {
                 apiService.searchWallpapers(
-                    query = cleanQuery,
+                    query = wallhavenQuery,
                     categories = categoriesCode,
                     purity = purityCode,
-                    sorting = "toplist",
+                    sorting = "relevance",
+                    order = "desc",
                     page = page,
                     apiKey = apiKey
                 )
@@ -575,79 +603,29 @@ class WallpaperRepository(
             listOf(if (isNsfw) "model" else "nature")
         }
 
-        var response: com.example.data.model.WallhavenSearchResponse? = null
+        // Single unified search call: all tags are included as plain
+        // terms (no + / - operators) with relevance sorting so the
+        // broadest relevant result set is returned in one request.
+        // Category and purity codes above are unchanged.
+        val wallhavenQuery = buildWallhavenQuery(targetTags)
 
-        // Hierarchy of query strategies with fast 4s timeouts:
-        // Tier 1: Multi-tag / active tags query with random sorting
-        val primaryQuery = targetTags.joinToString(" ")
-        try {
-            response = kotlinx.coroutines.withTimeout(4000L) {
+        val response = try {
+            kotlinx.coroutines.withTimeout(8000L) {
                 apiService.searchWallpapers(
-                    query = primaryQuery,
+                    query = wallhavenQuery,
                     categories = categoriesCode,
                     purity = purityCode,
-                    sorting = "random",
+                    sorting = "relevance",
+                    order = "desc",
                     apiKey = apiKey
                 )
-            }.takeIf { it.data.isNotEmpty() }
+            }
         } catch (e: Exception) {
-            Log.w("WallpaperRepo", "Tier 1 search failed for '$primaryQuery': ${e.message}")
+            Log.e("WallpaperRepo", "Wallhaven search failed for '$wallhavenQuery': ${e.message}", e)
+            return null
         }
 
-        // Tier 2 (User requested fallback): If primary search failed/empty, return a popular image matching only the first requested tag
-        if (response == null || response.data.isEmpty()) {
-            val firstTag = targetTags.firstOrNull() ?: if (isNsfw) "model" else "nature"
-            try {
-                response = kotlinx.coroutines.withTimeout(4000L) {
-                    apiService.searchWallpapers(
-                        query = firstTag,
-                        categories = categoriesCode,
-                        purity = purityCode,
-                        sorting = "toplist",
-                        apiKey = apiKey
-                    )
-                }.takeIf { it.data.isNotEmpty() }
-            } catch (e: Exception) {
-                Log.w("WallpaperRepo", "Tier 2 fallback search failed for '$firstTag': ${e.message}")
-            }
-        }
-
-        // Tier 3: Default tag fallback with toplist sorting
-        if (response == null || response.data.isEmpty()) {
-            val defaultTag = if (isNsfw) "model" else "nature"
-            try {
-                response = kotlinx.coroutines.withTimeout(4000L) {
-                    apiService.searchWallpapers(
-                        query = defaultTag,
-                        categories = "111",
-                        purity = if (!isNsfw || apiKey == null) "100" else purityCode,
-                        sorting = "toplist",
-                        apiKey = apiKey
-                    )
-                }.takeIf { it.data.isNotEmpty() }
-            } catch (e: Exception) {
-                Log.w("WallpaperRepo", "Tier 3 fallback search failed: ${e.message}")
-            }
-        }
-
-        // Tier 4: General broad search with toplist
-        if (response == null || response.data.isEmpty()) {
-            try {
-                response = kotlinx.coroutines.withTimeout(4000L) {
-                    apiService.searchWallpapers(
-                        query = null,
-                        categories = "111",
-                        purity = "100",
-                        sorting = "toplist",
-                        apiKey = apiKey
-                    )
-                }.takeIf { it.data.isNotEmpty() }
-            } catch (e: Exception) {
-                Log.e("WallpaperRepo", "Tier 4 general fallback search failed", e)
-            }
-        }
-
-        if (response == null || response.data.isEmpty()) return null
+        if (response.data.isEmpty()) return null
 
         // Select a fresh wallpaper, prioritizing non-existing IDs, with random selection among results
         val unseenItems = response.data.filter { it.id !in existingIds }
@@ -666,19 +644,6 @@ class WallpaperRepository(
                 .data(fullUrl)
                 .build()
         )
-
-        // Non-blocking background detail fetch to enrich tags without causing wallpaper latency
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val detail = apiService.getWallpaperDetails(item.id, apiKey)
-                val detailTags = detail.data?.tags?.map { it.name }?.filter { it.isNotBlank() } ?: emptyList()
-                if (detailTags.isNotEmpty()) {
-                    preferences.updateCurrentWallpaperTags(item.id, detailTags)
-                }
-            } catch (e: Exception) {
-                // Silently ignore detail fetch errors
-            }
-        }
 
         return Wallpaper(
             id = item.id,
