@@ -66,7 +66,7 @@ object WallpaperRenderHelper {
             paint.colorFilter = ColorMatrixColorFilter(cm)
         }
 
-        val blurRadius = (filters.blur.coerceIn(0f, 1f) * 25f).toInt()
+        val blurRadius = (filters.blur.coerceIn(0f, 0.1f) * 25f).toInt()
         if (blurRadius >= 1) {
             try {
                 val cropped = Bitmap.createBitmap(bitmap, srcRect.left, srcRect.top, srcRect.width(), srcRect.height())

@@ -338,7 +338,7 @@ fun SettingsScreen(
                     Slider(
                         value = activeFilters.blur,
                         onValueChange = { newVal ->
-                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
+                            val snapped = (Math.round(newVal * 100f) / 100f).coerceIn(0f, 0.1f)
                             if (snapped != activeFilters.blur) {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 viewModel.updateFilters(
@@ -349,8 +349,8 @@ fun SettingsScreen(
                                 )
                             }
                         },
-                        valueRange = 0f..1f,
-                        steps = 19,
+                        valueRange = 0f..0.1f,
+                        steps = 9,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("blur_slider")

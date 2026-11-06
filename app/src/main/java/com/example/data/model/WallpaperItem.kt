@@ -74,7 +74,7 @@ data class Wallpaper(
 
 data class ModeFilterSettings(
     val grayscale: Float = 0f,    // 0f (full color) to 1f (full grayscale)
-    val blur: Float = 0f,         // 0f (no blur) to 1f (max blur)
+    val blur: Float = 0f,         // 0f (no blur) to 0.1f (max blur, 10%)
     val brightness: Float = 1.0f, // 0f (black) to 1f (full opacity over black)
     val vignette: Float = 0f      // 0f (no vignette) to 1f (full vignette)
 )

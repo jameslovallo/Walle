@@ -90,7 +90,7 @@ class AppPreferences(private val context: Context) {
     val sfwFilterFlow: Flow<ModeFilterSettings> = context.dataStore.data.map {
         ModeFilterSettings(
             grayscale = it[KEY_SFW_GRAYSCALE] ?: 0f,
-            blur = it[KEY_SFW_BLUR] ?: 0f,
+            blur = (it[KEY_SFW_BLUR] ?: 0f).coerceIn(0f, 0.1f),
             brightness = it[KEY_SFW_BRIGHTNESS] ?: 1.0f,
             vignette = it[KEY_SFW_VIGNETTE] ?: 0f
         )
@@ -99,7 +99,7 @@ class AppPreferences(private val context: Context) {
     val nsfwFilterFlow: Flow<ModeFilterSettings> = context.dataStore.data.map {
         ModeFilterSettings(
             grayscale = it[KEY_NSFW_GRAYSCALE] ?: 0f,
-            blur = it[KEY_NSFW_BLUR] ?: 0f,
+            blur = (it[KEY_NSFW_BLUR] ?: 0f).coerceIn(0f, 0.1f),
             brightness = it[KEY_NSFW_BRIGHTNESS] ?: 1.0f,
             vignette = it[KEY_NSFW_VIGNETTE] ?: 0f
         )
@@ -173,7 +173,7 @@ class AppPreferences(private val context: Context) {
     suspend fun updateSfwFilters(grayscale: Float, blur: Float, brightness: Float, vignette: Float) {
         context.dataStore.edit {
             it[KEY_SFW_GRAYSCALE] = grayscale
-            it[KEY_SFW_BLUR] = blur
+            it[KEY_SFW_BLUR] = blur.coerceIn(0f, 0.1f)
             it[KEY_SFW_BRIGHTNESS] = brightness
             it[KEY_SFW_VIGNETTE] = vignette
         }
@@ -182,7 +182,7 @@ class AppPreferences(private val context: Context) {
     suspend fun updateNsfwFilters(grayscale: Float, blur: Float, brightness: Float, vignette: Float) {
         context.dataStore.edit {
             it[KEY_NSFW_GRAYSCALE] = grayscale
-            it[KEY_NSFW_BLUR] = blur
+            it[KEY_NSFW_BLUR] = blur.coerceIn(0f, 0.1f)
             it[KEY_NSFW_BRIGHTNESS] = brightness
             it[KEY_NSFW_VIGNETTE] = vignette
         }
