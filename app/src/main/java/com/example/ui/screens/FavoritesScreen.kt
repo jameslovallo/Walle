@@ -4,10 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -24,18 +26,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.example.data.local.FavoriteWallpaper
 import com.example.ui.WallEViewModel
-import com.example.ui.components.PositionedWallpaperImage
 
 @Composable
 fun FavoritesScreen(
@@ -60,10 +61,7 @@ fun FavoritesScreen(
             FavoriteCard(
                 favorite = fav,
                 onDeleteClick = { viewModel.deleteFavorite(fav.id) },
-                onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
-                onDragOffset = { newOffset ->
-                    viewModel.updateFavoriteOffset(fav.id, newOffset)
-                }
+                onItemClick = { viewModel.applyFavoriteAsCurrent(fav) }
             )
         }
     }
@@ -73,12 +71,8 @@ fun FavoritesScreen(
 fun FavoriteCard(
     favorite: FavoriteWallpaper,
     onDeleteClick: () -> Unit,
-    onItemClick: () -> Unit,
-    onDragOffset: (Float) -> Unit = {}
+    onItemClick: () -> Unit
 ) {
-    val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
-    var localOffset by remember(favorite.horizontalOffset) { mutableFloatStateOf(effectiveOffset) }
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -88,14 +82,17 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        PositionedWallpaperImage(
-            url = favorite.thumbUrl.ifBlank { favorite.url },
-            fallbackUrl = favorite.url,
-            horizontalOffset = localOffset,
-            onDrag = { newOffset ->
-                localOffset = newOffset
-                onDragOffset(newOffset)
-            },
+        val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
+        val biasX = (effectiveOffset * 2f - 1f)
+
+        AsyncImage(
+            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                .data(favorite.thumbUrl.ifBlank { favorite.url })
+                .crossfade(true)
+                .build(),
+            contentDescription = "Favorite image",
+            contentScale = ContentScale.Crop,
+            alignment = androidx.compose.ui.BiasAlignment(biasX, 0f),
             modifier = Modifier.fillMaxSize()
         )
 

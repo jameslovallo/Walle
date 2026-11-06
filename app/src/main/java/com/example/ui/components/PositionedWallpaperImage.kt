@@ -1,7 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -22,28 +22,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
-import kotlin.math.abs
-
-/** Horizontal distance (dp) that must be exceeded before repositioning starts. */
-private const val HorizontalDragThresholdDp = 24f
-
-private enum class DragLock { Undecided, Horizontal, Vertical }
 
 /**
  * Robust wallpaper image component that fills the aspect-ratio frame,
  * scales the uncropped image with ContentScale.Crop, and aligns it horizontally
  * according to horizontalOffset (0f = left, 0.5f = center, 1f = right).
  * Supports horizontal dragging to adjust the offset in real time.
- *
- * Dragging is locked to horizontal once the gesture clearly moves horizontally:
- * it must exceed [HorizontalDragThresholdDp] and exceed the vertical movement.
- * Until then (or once locked to vertical) the drag is not consumed, so a
- * vertical swipe scrolls the parent list instead of repositioning.
  */
 @Composable
 fun PositionedWallpaperImage(
@@ -55,8 +43,6 @@ fun PositionedWallpaperImage(
     onDragEnd: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
-    val thresholdPx = with(density) { HorizontalDragThresholdDp.dp.toPx() }
     var isError by remember(url) { mutableStateOf(false) }
     var isLoading by remember(url) { mutableStateOf(true) }
 
@@ -73,41 +59,16 @@ fun PositionedWallpaperImage(
             .then(
                 if (onDrag != null) {
                     Modifier.pointerInput(activeUrl) {
-                        var totalHorizontal = 0f
-                        var totalVertical = 0f
-                        var lock = DragLock.Undecided
-                        detectDragGestures(
-                            onDragStart = {
-                                totalHorizontal = 0f
-                                totalVertical = 0f
-                                lock = DragLock.Undecided
-                            },
-                            onDrag = { change, dragAmount ->
-                                if (lock == DragLock.Vertical) return@detectDragGestures
-                                totalHorizontal += dragAmount.x
-                                totalVertical += dragAmount.y
-                                if (lock == DragLock.Undecided) {
-                                    val absH = abs(totalHorizontal)
-                                    val absV = abs(totalVertical)
-                                    lock = when {
-                                        absH >= thresholdPx && absH > absV -> DragLock.Horizontal
-                                        absV >= thresholdPx && absV >= absH -> DragLock.Vertical
-                                        else -> return@detectDragGestures
-                                    }
-                                    if (lock != DragLock.Horizontal) return@detectDragGestures
-                                }
+                        detectHorizontalDragGestures(
+                            onHorizontalDrag = { change, dragAmount ->
                                 change.consume()
-                                val delta = dragAmount.x / 320f
+                                val delta = dragAmount / 320f
                                 val updated = (localOffset - delta).coerceIn(0f, 1f)
                                 localOffset = updated
                                 onDrag(updated)
                             },
                             onDragEnd = {
-                                lock = DragLock.Undecided
                                 onDragEnd?.invoke()
-                            },
-                            onDragCancel = {
-                                lock = DragLock.Undecided
                             }
                         )
                     }

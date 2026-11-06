@@ -40,8 +40,8 @@ class WallEModeTileService : TileService() {
             preferences.setNsfwMode(newMode)
             updateTileDisplay(newMode)
 
-            // Automatically apply a wallpaper from the favorites for the newly activated mode
-            repository.applyNextScheduledFavoriteWallpaper()
+            // Automatically fetch and apply wallpaper for the newly activated mode
+            repository.fetchAndApplyNextWallpaper()
         }
     }
 

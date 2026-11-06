@@ -15,9 +15,11 @@ import com.example.data.local.AppPreferences
 import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.Wallpaper
+import com.example.data.model.WallhavenImageItem
 import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -38,80 +40,6 @@ class WallpaperRepository(
     private val imageLoader = ImageLoader(context)
     private val positioningPrefs = context.getSharedPreferences("walle_positioning_cache", Context.MODE_PRIVATE)
     private val memoryOffsetCache = java.util.concurrent.ConcurrentHashMap<String, Float>()
-
-    companion object {
-        /**
-         * Builds the Wallhaven `q` parameter from search terms.
-         *
-         * Wallhaven treats `+term` as "must have" (AND) which collapses
-         * results, and `-term` as an exclusion. To return the most results
-         * possible every term is included as a plain tag joined with a
-         * single space, with no `+` / `-` operators. Empty input returns
-         * null, which Wallhaven interprets as the latest SFW listing.
-         */
-        fun buildWallhavenQuery(terms: List<String>): String? {
-            val cleaned = terms
-                .flatMap { it.split(',', ' ') }
-                .map { it.trim().trimStart('+', '-') }
-                .map { it.lowercase() }
-                .filter { it.isNotBlank() }
-                .distinct()
-            return if (cleaned.isEmpty()) null else cleaned.joinToString(" ")
-        }
-
-        /** Splits free-text Discover input into individual search terms. */
-        fun parseSearchTerms(text: String?): List<String> =
-            text.orEmpty()
-                .split(',', ' ')
-                .map { it.trim().trimStart('+', '-') }
-                .map { it.lowercase() }
-                .filter { it.isNotBlank() }
-                .distinct()
-
-        /**
-         * Maps a category selection to Wallhaven's `categories` bits
-         * (general/anime/people). "all" (and any unknown value) is the
-         * most inclusive: 111.
-         */
-        fun categoryCode(category: String): String = when (category.trim().lowercase()) {
-            "general" -> "100"
-            "anime" -> "010"
-            "people" -> "001"
-            else -> "111"
-        }
-
-        /**
-         * Maps a purity selection to Wallhaven's `purity` bits
-         * (sfw/sketchy/nsfw). "all" is the most inclusive.
-         *
-         * SFW mode always returns SFW-only ("100") regardless of the
-         * selection. In NSFW mode with an API key, "all" returns "111"
-         * (sfw + sketchy + nsfw). Without an API key, NSFW content is
-         * blocked, so "all" caps at "110" (sfw + sketchy) — the most
-         * inclusive that still returns results.
-         */
-        fun purityCode(purity: String, isNsfwMode: Boolean, hasApiKey: Boolean): String {
-            if (!isNsfwMode) return "100"
-            val selection = purity.trim().lowercase()
-            return if (hasApiKey) {
-                when (selection) {
-                    "sfw" -> "100"
-                    "sketchy" -> "010"
-                    "nsfw" -> "001"
-                    "both" -> "011"
-                    else -> "111"
-                }
-            } else {
-                when (selection) {
-                    "sfw" -> "100"
-                    "sketchy" -> "010"
-                    "nsfw" -> "100"
-                    "both" -> "010"
-                    else -> "110"
-                }
-            }
-        }
-    }
 
     fun getCachedOffset(id: String): Float? {
         if (id.isBlank()) return null
@@ -176,6 +104,15 @@ class WallpaperRepository(
 
     val isNsfwMode: Flow<Boolean> = preferences.isNsfwModeFlow
     val currentWallpaper: Flow<CurrentWallpaperInfo> = preferences.currentWallpaperFlow
+    val sfwTags: Flow<Set<String>> = preferences.activeSfwTagsFlow
+    val nsfwTags: Flow<Set<String>> = preferences.activeNsfwTagsFlow
+    val savedSfwTags: Flow<Set<String>> = preferences.savedSfwTagsFlow
+    val savedNsfwTags: Flow<Set<String>> = preferences.savedNsfwTagsFlow
+    val activeSfwTags: Flow<Set<String>> = preferences.activeSfwTagsFlow
+    val activeNsfwTags: Flow<Set<String>> = preferences.activeNsfwTagsFlow
+    val nsfwPurity: Flow<String> = preferences.nsfwPurityFlow
+    val sfwCategory: Flow<String> = preferences.sfwCategoryFlow
+    val nsfwCategory: Flow<String> = preferences.nsfwCategoryFlow
     val apiKey: Flow<String> = preferences.apiKeyFlow
     val intervalMinutes: Flow<Int> = preferences.intervalMinutesFlow
     val sfwFilters = preferences.sfwFilterFlow
@@ -296,11 +233,7 @@ class WallpaperRepository(
     suspend fun updateCropOffset(id: String, offset: Float) = withContext(Dispatchers.IO) {
         val clamped = offset.coerceIn(0f, 1f)
         setCachedOffset(id, clamped)
-        // Only update the live wallpaper offset if this is the active wallpaper,
-        // so repositioning other favorites (e.g. from Favorites) does not disturb it.
-        if (preferences.currentWallpaperFlow.first().id == id) {
-            preferences.updateCurrentWallpaperOffset(clamped)
-        }
+        preferences.updateCurrentWallpaperOffset(clamped)
         val isFav = favoriteDao.isFavoriteDirect(id)
         if (isFav) {
             favoriteDao.updateCropOffset(id, clamped)
@@ -400,34 +333,46 @@ class WallpaperRepository(
     }
 
     /**
-     * Single Wallhaven search call used by the Discover grid and the
-     * homescreen shuffle.
-     *
-     * Defaults are the most inclusive: [category] = "all" (111) and
-     * [purity] = "all" (111 with an API key). Sorting is relevance and
-     * search terms are included as plain tags in `q` (see
-     * [buildWallhavenQuery]) so the call returns the most results
-     * possible for the selected filters.
+     * Searches Wallhaven with pagination support for the Discover grid.
      */
-    suspend fun searchWallpapers(
-        tags: List<String> = emptyList(),
-        category: String = "all",
-        purity: String = "all",
+    suspend fun searchWallpapersPaged(
+        query: String?,
+        category: String,
+        purity: String,
+        isNsfwMode: Boolean,
         page: Int = 1
     ): Result<com.example.data.model.WallhavenSearchResult> = withContext(Dispatchers.IO) {
         val apiKey = preferences.apiKeyFlow.first().takeIf { it.isNotBlank() }
-        val isNsfwMode = preferences.isNsfwModeFlow.first()
-        val categories = categoryCode(category)
-        val purityCode = purityCode(purity, isNsfwMode, apiKey != null)
+
+        val categoriesCode = when (category.lowercase()) {
+            "anime" -> "010"
+            "people" -> "001"
+            else -> "111"
+        }
+
+        val purityCode = if (!isNsfwMode) {
+            "100"
+        } else {
+            if (apiKey != null) {
+                when (purity.lowercase()) {
+                    "sketchy" -> "010"
+                    "nsfw" -> "001"
+                    else -> "011"
+                }
+            } else {
+                "010"
+            }
+        }
+
+        val cleanQuery = query?.trim()?.takeIf { it.isNotBlank() }
 
         try {
             val response = kotlinx.coroutines.withTimeout(8000L) {
                 apiService.searchWallpapers(
-                    query = buildWallhavenQuery(tags),
-                    categories = categories,
+                    query = cleanQuery,
+                    categories = categoriesCode,
                     purity = purityCode,
-                    sorting = "relevance",
-                    order = "desc",
+                    sorting = "toplist",
                     page = page,
                     apiKey = apiKey
                 )
@@ -439,7 +384,6 @@ class WallpaperRepository(
             val total = meta?.total ?: response.data.size
 
             val favoriteIds = favoriteDao.getAllFavoriteIds().toSet()
-            val queryTags = buildWallhavenQuery(tags)?.split(" ") ?: emptyList()
 
             val wallpapers = response.data.map { item ->
                 val fullUrl = item.path.ifBlank { item.url }
@@ -458,73 +402,65 @@ class WallpaperRepository(
                     resolution = item.resolution,
                     horizontalOffset = offset,
                     isFavorite = isFav,
-                    tags = item.tags?.map { it.name }?.takeIf { it.isNotEmpty() } ?: queryTags
+                    tags = item.tags?.map { it.name } ?: emptyList()
                 )
             }
 
             Result.success(com.example.data.model.WallhavenSearchResult(wallpapers, currentPage, lastPage, total))
         } catch (e: Exception) {
-            Log.e("WallpaperRepo", "Error searching wallpapers", e)
+            Log.e("WallpaperRepo", "Error searching wallpapers paged", e)
             Result.failure(e)
         }
-    }
-
-    private suspend fun fetchRandomWallpaper(): Wallpaper? {
-        val isNsfw = preferences.isNsfwModeFlow.first()
-        val defaultTag = if (isNsfw) "women" else "nature"
-        val defaultCategory = if (isNsfw) "people" else "all"
-        val existingIds = favoriteDao.getAllFavoriteIds().toSet()
-        val result = searchWallpapers(tags = listOf(defaultTag), category = defaultCategory, purity = "all", page = 1).getOrNull()
-            ?: return null
-        val unseen = result.wallpapers.filter { it.id !in existingIds }
-        return unseen.randomOrNull() ?: result.wallpapers.randomOrNull()
     }
 
     /**
      * Fetches and applies the next wallpaper with minimal latency.
      * 1) Face detection model ONLY determines positioning the first time an image is loaded,
      *    never again for the same image (checked against memory & persistent cache).
-     * 2) Shuffles saved favorites when available, otherwise makes a single
-     *    Wallhaven search call for a new image.
+     * 2) If no tag is selected, shuffles saved favorites (preserving existing positioning).
      */
     suspend fun fetchAndApplyNextWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
             val isNsfw = preferences.isNsfwModeFlow.first()
+            val tags = if (isNsfw) preferences.nsfwTagsFlow.first() else preferences.sfwTagsFlow.first()
+            val existingIds = favoriteDao.getAllFavoriteIds().toSet()
 
             var candidateWallpaper: Wallpaper? = null
 
-            // Shuffle saved favorites (preserving existing positioning).
-            val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
-            val randomFav = favoriteDao.getRandomFavorite(purities)
-            if (randomFav != null) {
-                val finalOffset = getOrDeterminePositionOffset(
-                    randomFav.id,
-                    randomFav.localFilePath ?: randomFav.thumbUrl.ifBlank { randomFav.url }
-                )
-                if (randomFav.horizontalOffset !in 0f..1f) {
-                    favoriteDao.updateCropOffset(randomFav.id, finalOffset)
+            if (tags.isEmpty()) {
+                // If no tag is selected, shuffled photos saved from favorites
+                val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
+                val randomFav = favoriteDao.getRandomFavorite(purities)
+                if (randomFav != null) {
+                    val finalOffset = getOrDeterminePositionOffset(
+                        randomFav.id,
+                        randomFav.localFilePath ?: randomFav.thumbUrl.ifBlank { randomFav.url }
+                    )
+                    if (randomFav.horizontalOffset !in 0f..1f) {
+                        favoriteDao.updateCropOffset(randomFav.id, finalOffset)
+                    }
+                    val favTags = if (randomFav.tags.isNotBlank()) {
+                        randomFav.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                    } else {
+                        emptyList()
+                    }
+                    candidateWallpaper = Wallpaper(
+                        id = randomFav.id,
+                        fullUrl = randomFav.url,
+                        thumbUrl = randomFav.thumbUrl,
+                        purity = randomFav.purity,
+                        category = randomFav.category,
+                        resolution = randomFav.resolution,
+                        horizontalOffset = finalOffset,
+                        isFavorite = true,
+                        tags = favTags
+                    )
                 }
-                val favTags = if (randomFav.tags.isNotBlank()) {
-                    randomFav.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
-                } else {
-                    emptyList()
-                }
-                candidateWallpaper = Wallpaper(
-                    id = randomFav.id,
-                    fullUrl = randomFav.url,
-                    thumbUrl = randomFav.thumbUrl,
-                    purity = randomFav.purity,
-                    category = randomFav.category,
-                    resolution = randomFav.resolution,
-                    horizontalOffset = finalOffset,
-                    isFavorite = true,
-                    tags = favTags
-                )
             }
 
             if (candidateWallpaper == null) {
-                // Single Wallhaven search call (New image!)
-                val fetched = fetchRandomWallpaper()
+                // Query Wallhaven API (New image!)
+                val fetched = fetchFromWallhaven(isNsfw, tags, existingIds)
                 if (fetched != null) {
                     // Face detection runs ONLY the first time an image is loaded,
                     // using the lightweight thumbnail to prevent high network latency.
@@ -563,11 +499,12 @@ class WallpaperRepository(
 
     /**
      * Initial install fetch: Guarantees fetching an image matching "nature" for SFW mode
-     * or "women" for NSFW mode when the app is first installed.
+     * or "model" for NSFW mode when the app is first installed.
      */
-    suspend fun fetchAndApplyInitialWallpaper(isNsfw: Boolean): Result<Wallpaper> = withContext(Dispatchers.IO) {
+    suspend fun fetchAndApplyInitialWallpaper(isNsfw: Boolean, initialTag: String): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
-            val fetched = fetchRandomWallpaper()
+            val existingIds = favoriteDao.getAllFavoriteIds().toSet()
+            val fetched = fetchFromWallhaven(isNsfw, setOf(initialTag), existingIds)
             if (fetched != null) {
                 val smartOffset = getOrDeterminePositionOffset(
                     fetched.id,
@@ -592,6 +529,168 @@ class WallpaperRepository(
             Log.e("WallpaperRepo", "Error fetching initial wallpaper", e)
             fetchAndApplyNextWallpaper()
         }
+    }
+
+    private suspend fun fetchFromWallhaven(
+        isNsfw: Boolean,
+        tags: Set<String>,
+        existingIds: Set<String>
+    ): Wallpaper? {
+        val apiKey = preferences.apiKeyFlow.first().takeIf { it.isNotBlank() }
+
+        val categorySelection = if (isNsfw) {
+            preferences.nsfwCategoryFlow.first()
+        } else {
+            preferences.sfwCategoryFlow.first()
+        }
+        val categoriesCode = when (categorySelection) {
+            "anime" -> "010"
+            "people" -> "001"
+            else -> "111"
+        }
+
+        // Purity code:
+        // SFW mode: "100" (SFW only)
+        // NSFW mode:
+        // - With API key: "010" (sketchy), "001" (nsfw), or "011" (both)
+        // - Without API key: Wallhaven returns 0 items for "001", so fallback to "010" (sketchy)
+        val nsfwPuritySelection = preferences.nsfwPurityFlow.first()
+        val purityCode = if (!isNsfw) {
+            "100"
+        } else {
+            if (apiKey != null) {
+                when (nsfwPuritySelection) {
+                    "sketchy" -> "010"
+                    "nsfw" -> "001"
+                    else -> "011"
+                }
+            } else {
+                "010"
+            }
+        }
+
+        val targetTags = if (tags.isNotEmpty()) {
+            tags.toList()
+        } else {
+            listOf(if (isNsfw) "model" else "nature")
+        }
+
+        var response: com.example.data.model.WallhavenSearchResponse? = null
+
+        // Hierarchy of query strategies with fast 4s timeouts:
+        // Tier 1: Multi-tag / active tags query with random sorting
+        val primaryQuery = targetTags.joinToString(" ")
+        try {
+            response = kotlinx.coroutines.withTimeout(4000L) {
+                apiService.searchWallpapers(
+                    query = primaryQuery,
+                    categories = categoriesCode,
+                    purity = purityCode,
+                    sorting = "random",
+                    apiKey = apiKey
+                )
+            }.takeIf { it.data.isNotEmpty() }
+        } catch (e: Exception) {
+            Log.w("WallpaperRepo", "Tier 1 search failed for '$primaryQuery': ${e.message}")
+        }
+
+        // Tier 2 (User requested fallback): If primary search failed/empty, return a popular image matching only the first requested tag
+        if (response == null || response.data.isEmpty()) {
+            val firstTag = targetTags.firstOrNull() ?: if (isNsfw) "model" else "nature"
+            try {
+                response = kotlinx.coroutines.withTimeout(4000L) {
+                    apiService.searchWallpapers(
+                        query = firstTag,
+                        categories = categoriesCode,
+                        purity = purityCode,
+                        sorting = "toplist",
+                        apiKey = apiKey
+                    )
+                }.takeIf { it.data.isNotEmpty() }
+            } catch (e: Exception) {
+                Log.w("WallpaperRepo", "Tier 2 fallback search failed for '$firstTag': ${e.message}")
+            }
+        }
+
+        // Tier 3: Default tag fallback with toplist sorting
+        if (response == null || response.data.isEmpty()) {
+            val defaultTag = if (isNsfw) "model" else "nature"
+            try {
+                response = kotlinx.coroutines.withTimeout(4000L) {
+                    apiService.searchWallpapers(
+                        query = defaultTag,
+                        categories = "111",
+                        purity = if (!isNsfw || apiKey == null) "100" else purityCode,
+                        sorting = "toplist",
+                        apiKey = apiKey
+                    )
+                }.takeIf { it.data.isNotEmpty() }
+            } catch (e: Exception) {
+                Log.w("WallpaperRepo", "Tier 3 fallback search failed: ${e.message}")
+            }
+        }
+
+        // Tier 4: General broad search with toplist
+        if (response == null || response.data.isEmpty()) {
+            try {
+                response = kotlinx.coroutines.withTimeout(4000L) {
+                    apiService.searchWallpapers(
+                        query = null,
+                        categories = "111",
+                        purity = "100",
+                        sorting = "toplist",
+                        apiKey = apiKey
+                    )
+                }.takeIf { it.data.isNotEmpty() }
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Tier 4 general fallback search failed", e)
+            }
+        }
+
+        if (response == null || response.data.isEmpty()) return null
+
+        // Select a fresh wallpaper, prioritizing non-existing IDs, with random selection among results
+        val unseenItems = response.data.filter { it.id !in existingIds }
+        val item = unseenItems.randomOrNull() ?: response.data.randomOrNull() ?: return null
+
+        val fullUrl = item.path.ifBlank { item.url }
+        val thumb = item.thumbs?.large ?: item.thumbs?.original ?: item.thumbs?.small ?: fullUrl
+
+        // Direct tags or target query tags (avoiding synchronous blocking detail call)
+        val directTags = item.tags?.map { it.name } ?: emptyList()
+        val initialTags = if (directTags.isNotEmpty()) directTags else targetTags
+
+        // Pre-warm Coil cache for full image in background
+        imageLoader.enqueue(
+            ImageRequest.Builder(context)
+                .data(fullUrl)
+                .build()
+        )
+
+        // Non-blocking background detail fetch to enrich tags without causing wallpaper latency
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val detail = apiService.getWallpaperDetails(item.id, apiKey)
+                val detailTags = detail.data?.tags?.map { it.name }?.filter { it.isNotBlank() } ?: emptyList()
+                if (detailTags.isNotEmpty()) {
+                    preferences.updateCurrentWallpaperTags(item.id, detailTags)
+                }
+            } catch (e: Exception) {
+                // Silently ignore detail fetch errors
+            }
+        }
+
+        return Wallpaper(
+            id = item.id,
+            fullUrl = fullUrl,
+            thumbUrl = thumb,
+            purity = item.purity,
+            category = item.category,
+            resolution = item.resolution,
+            horizontalOffset = 0.5f,
+            isFavorite = false,
+            tags = initialTags
+        )
     }
 
     /**

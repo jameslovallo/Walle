@@ -9,7 +9,6 @@ import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.ModeFilterSettings
 import com.example.data.model.Wallpaper
-import com.example.data.repository.WallpaperRepository
 import com.example.worker.WallpaperIntervalWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,16 +27,22 @@ data class WallEUIState(
     // Discover Grid & Search State
     val discoverWallpapers: List<Wallpaper> = emptyList(),
     val discoverQuery: String = "nature",
-    val discoverCategory: String = "all", // "all", "anime", "people" — defaults to "people" in NSFW mode
-    val discoverPurity: String = "all", // "all", "both", "sketchy", "nsfw", "sfw" — most inclusive default
+    val discoverCategory: String = "all", // "all", "anime", "people"
+    val discoverPurity: String = "both",  // "both", "sketchy", "nsfw"
     val isDiscoverLoading: Boolean = false,
     val isDiscoverLoadingMore: Boolean = false,
     val discoverCurrentPage: Int = 1,
     val discoverLastPage: Int = 1,
     val discoverTotal: Int = 0,
     val discoverHasReachedEnd: Boolean = false,
-    /** Incremented on every new search so the Discover grid can reset to the top. */
-    val searchGeneration: Int = 0,
+    // Legacy tags & mode filters
+    val savedSfwTags: Set<String> = emptySet(),
+    val activeSfwTags: Set<String> = emptySet(),
+    val savedNsfwTags: Set<String> = emptySet(),
+    val activeNsfwTags: Set<String> = emptySet(),
+    val nsfwPurity: String = "both",
+    val sfwCategory: String = "all",
+    val nsfwCategory: String = "people",
     val sfwFilters: ModeFilterSettings = ModeFilterSettings(),
     val nsfwFilters: ModeFilterSettings = ModeFilterSettings(),
     val apiKey: String = "",
@@ -79,9 +84,31 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             if (current.url.isBlank()) {
                 _uiState.value = _uiState.value.copy(isLoading = true)
                 val isNsfw = preferences.isNsfwModeFlow.first()
-                repository.fetchAndApplyInitialWallpaper(isNsfw)
+                val targetTag = if (isNsfw) "model" else "nature"
+                repository.fetchAndApplyInitialWallpaper(isNsfw, targetTag)
                 _uiState.value = _uiState.value.copy(isLoading = false)
             }
+        }
+        viewModelScope.launch {
+            repository.savedSfwTags.collect { tags -> _uiState.value = _uiState.value.copy(savedSfwTags = tags) }
+        }
+        viewModelScope.launch {
+            repository.activeSfwTags.collect { tags -> _uiState.value = _uiState.value.copy(activeSfwTags = tags) }
+        }
+        viewModelScope.launch {
+            repository.savedNsfwTags.collect { tags -> _uiState.value = _uiState.value.copy(savedNsfwTags = tags) }
+        }
+        viewModelScope.launch {
+            repository.activeNsfwTags.collect { tags -> _uiState.value = _uiState.value.copy(activeNsfwTags = tags) }
+        }
+        viewModelScope.launch {
+            repository.nsfwPurity.collect { purity -> _uiState.value = _uiState.value.copy(nsfwPurity = purity) }
+        }
+        viewModelScope.launch {
+            repository.sfwCategory.collect { cat -> _uiState.value = _uiState.value.copy(sfwCategory = cat) }
+        }
+        viewModelScope.launch {
+            repository.nsfwCategory.collect { cat -> _uiState.value = _uiState.value.copy(nsfwCategory = cat) }
         }
         viewModelScope.launch {
             repository.sfwFilters.collect { filters -> _uiState.value = _uiState.value.copy(sfwFilters = filters) }
@@ -128,13 +155,14 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         // Initial search for Discover grid
         viewModelScope.launch {
             val isNsfw = preferences.isNsfwModeFlow.first()
-            val initialQuery = if (isNsfw) "women" else "nature"
-            val initialCategory = if (isNsfw) "people" else "all"
+            val initialCat = if (isNsfw) "people" else "all"
+            val initialPurity = "both"
+            val initialQuery = if (isNsfw) "model" else "nature"
             _uiState.value = _uiState.value.copy(
                 isNsfwMode = isNsfw,
-                discoverQuery = initialQuery,
-                discoverCategory = initialCategory,
-                discoverPurity = "all"
+                discoverCategory = initialCat,
+                discoverPurity = initialPurity,
+                discoverQuery = initialQuery
             )
             performSearch(initialQuery)
         }
@@ -150,14 +178,17 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             discoverQuery = q,
             discoverCurrentPage = 1,
             discoverHasReachedEnd = false,
-            searchGeneration = _uiState.value.searchGeneration + 1,
             isDiscoverLoading = true
         )
         viewModelScope.launch {
-            val res = repository.searchWallpapers(
-                tags = WallpaperRepository.parseSearchTerms(q),
-                category = _uiState.value.discoverCategory,
-                purity = _uiState.value.discoverPurity,
+            val isNsfw = _uiState.value.isNsfwMode
+            val cat = _uiState.value.discoverCategory
+            val purity = _uiState.value.discoverPurity
+            val res = repository.searchWallpapersPaged(
+                query = q,
+                category = cat,
+                purity = purity,
+                isNsfwMode = isNsfw,
                 page = 1
             )
             res.onSuccess { searchRes ->
@@ -191,10 +222,11 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
         _uiState.value = _uiState.value.copy(isDiscoverLoadingMore = true)
         viewModelScope.launch {
-            val res = repository.searchWallpapers(
-                tags = WallpaperRepository.parseSearchTerms(state.discoverQuery),
+            val res = repository.searchWallpapersPaged(
+                query = state.discoverQuery,
                 category = state.discoverCategory,
                 purity = state.discoverPurity,
+                isNsfwMode = state.isNsfwMode,
                 page = nextPage
             )
             res.onSuccess { searchRes ->
@@ -215,25 +247,13 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDiscoverCategory(category: String) {
-        if (_uiState.value.discoverCategory == category) return
         _uiState.value = _uiState.value.copy(discoverCategory = category)
         performSearch()
     }
 
     fun setDiscoverPurity(purity: String) {
-        if (_uiState.value.discoverPurity == purity) return
         _uiState.value = _uiState.value.copy(discoverPurity = purity)
         performSearch()
-    }
-
-    fun updateFavoriteOffset(id: String, offset: Float) {
-        val clamped = offset.coerceIn(0f, 1f)
-        viewModelScope.launch {
-            repository.updateCropOffset(id, clamped)
-            if (_uiState.value.currentWallpaper.id == id) {
-                repository.notifyWallpaperChanged()
-            }
-        }
     }
 
     fun updateWallpaperOffset(id: String, offset: Float) {
@@ -308,15 +328,16 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleMode() {
         val nextMode = !_uiState.value.isNsfwMode
-        val nextQuery = if (nextMode) "women" else "nature"
-        val nextCategory = if (nextMode) "people" else "all"
+        val nextCat = if (nextMode) "people" else "all"
+        val nextPurity = "both"
+        val nextQuery = if (nextMode) "model" else "nature"
         viewModelScope.launch {
             preferences.setNsfwMode(nextMode)
             _uiState.value = _uiState.value.copy(
                 isNsfwMode = nextMode,
-                discoverQuery = nextQuery,
-                discoverCategory = nextCategory,
-                discoverPurity = "all"
+                discoverCategory = nextCat,
+                discoverPurity = nextPurity,
+                discoverQuery = nextQuery
             )
             performSearch(nextQuery)
         }
@@ -345,6 +366,24 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.updateCropOffset(current.id, clamped)
             repository.notifyWallpaperChanged()
+        }
+    }
+
+    fun setNsfwPurity(purity: String) {
+        viewModelScope.launch {
+            preferences.setNsfwPurity(purity)
+            setDiscoverPurity(purity)
+        }
+    }
+
+    fun setCategory(category: String) {
+        viewModelScope.launch {
+            if (_uiState.value.isNsfwMode) {
+                preferences.setNsfwCategory(category)
+            } else {
+                preferences.setSfwCategory(category)
+            }
+            setDiscoverCategory(category)
         }
     }
 

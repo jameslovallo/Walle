@@ -19,6 +19,21 @@ data class WallhavenMeta(
 )
 
 @JsonClass(generateAdapter = true)
+data class WallhavenDetailResponse(
+    @Json(name = "data") val data: WallhavenDetailItem? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class WallhavenDetailItem(
+    @Json(name = "id") val id: String = "",
+    @Json(name = "url") val url: String = "",
+    @Json(name = "path") val path: String = "",
+    @Json(name = "purity") val purity: String = "sfw",
+    @Json(name = "category") val category: String = "general",
+    @Json(name = "tags") val tags: List<WallhavenTagItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class WallhavenTagItem(
     @Json(name = "id") val id: Int = 0,
     @Json(name = "name") val name: String = "",

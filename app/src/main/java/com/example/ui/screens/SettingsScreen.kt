@@ -316,8 +316,8 @@ fun SettingsScreen(
                     )
                 }
 
-                // 2. Blur Filter Slider — maximum 10%, 1% steps
-                val blurPercent = (activeFilters.blur.coerceIn(0f, 0.1f) * 100).roundToInt()
+                // 2. Blur Filter Slider
+                val blurPercent = (activeFilters.blur * 100).roundToInt()
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -336,9 +336,9 @@ fun SettingsScreen(
                         )
                     }
                     Slider(
-                        value = activeFilters.blur.coerceIn(0f, 0.1f),
+                        value = activeFilters.blur,
                         onValueChange = { newVal ->
-                            val snapped = (Math.round(newVal * 100f) / 100f).coerceIn(0f, 0.1f)
+                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
                             if (snapped != activeFilters.blur) {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 viewModel.updateFilters(
@@ -349,8 +349,8 @@ fun SettingsScreen(
                                 )
                             }
                         },
-                        valueRange = 0f..0.1f,
-                        steps = 9,
+                        valueRange = 0f..1f,
+                        steps = 19,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("blur_slider")
