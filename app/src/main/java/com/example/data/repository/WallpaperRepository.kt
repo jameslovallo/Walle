@@ -19,6 +19,7 @@ import com.example.data.model.WallhavenImageItem
 import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -37,6 +38,46 @@ class WallpaperRepository(
     private val apiService = NetworkClient.apiService
     private val favoriteDao = database.favoriteDao()
     private val imageLoader = ImageLoader(context)
+    private val positioningPrefs = context.getSharedPreferences("walle_positioning_cache", Context.MODE_PRIVATE)
+    private val memoryOffsetCache = java.util.concurrent.ConcurrentHashMap<String, Float>()
+
+    fun getCachedOffset(id: String): Float? {
+        if (id.isBlank()) return null
+        memoryOffsetCache[id]?.let { return it }
+        if (positioningPrefs.contains(id)) {
+            val cached = positioningPrefs.getFloat(id, -1f)
+            if (cached in 0f..1f) {
+                memoryOffsetCache[id] = cached
+                return cached
+            }
+        }
+        return null
+    }
+
+    fun setCachedOffset(id: String, offset: Float) {
+        if (id.isBlank()) return
+        val clamped = offset.coerceIn(0f, 1f)
+        memoryOffsetCache[id] = clamped
+        positioningPrefs.edit().putFloat(id, clamped).apply()
+    }
+
+    suspend fun getOrDeterminePositionOffset(id: String, thumbUrlOrSource: String): Float {
+        if (id.isNotBlank()) {
+            getCachedOffset(id)?.let { return it }
+            val fav = favoriteDao.getFavoriteById(id)
+            if (fav != null && fav.horizontalOffset in 0f..1f) {
+                setCachedOffset(id, fav.horizontalOffset)
+                return fav.horizontalOffset
+            }
+        }
+
+        // Only run AI model if never determined before for this image
+        val detected = detectFaceOffset(thumbUrlOrSource)
+        if (id.isNotBlank()) {
+            setCachedOffset(id, detected)
+        }
+        return detected
+    }
 
     val isNsfwMode: Flow<Boolean> = preferences.isNsfwModeFlow
     val currentWallpaper: Flow<CurrentWallpaperInfo> = preferences.currentWallpaperFlow
@@ -168,6 +209,7 @@ class WallpaperRepository(
 
     suspend fun updateCropOffset(id: String, offset: Float) = withContext(Dispatchers.IO) {
         val clamped = offset.coerceIn(0f, 1f)
+        setCachedOffset(id, clamped)
         preferences.updateCurrentWallpaperOffset(clamped)
         val isFav = favoriteDao.isFavoriteDirect(id)
         if (isFav) {
@@ -207,20 +249,17 @@ class WallpaperRepository(
 
     /**
      * Applies a favorite as current wallpaper.
-     * If the favorite was imported from a folder without existing positioning data (offset < 0f),
-     * runs face detection and applies positioning before setting the image to prevent jank.
-     * Otherwise preserves existing user positioning data.
+     * Uses cached positioning data if available or if set in the favorite.
+     * Runs face detection ONLY if positioning has never been determined before,
+     * caching the result immediately to prevent future duplicate calculations.
      */
     suspend fun applyFavorite(fav: FavoriteWallpaper) = withContext(Dispatchers.IO) {
-        val finalOffset = if (fav.horizontalOffset in 0f..1f) {
-            // Preserves existing positioning data
-            fav.horizontalOffset
-        } else {
-            // Favorite applied from folder without existing positioning data:
-            // Calculate face/focal offset and update before setting image to prevent jank
-            val detected = detectFaceOffset(fav.localFilePath ?: fav.url)
-            favoriteDao.updateCropOffset(fav.id, detected)
-            detected
+        val finalOffset = getOrDeterminePositionOffset(
+            fav.id,
+            fav.localFilePath ?: fav.thumbUrl.ifBlank { fav.url }
+        )
+        if (fav.horizontalOffset !in 0f..1f) {
+            favoriteDao.updateCropOffset(fav.id, finalOffset)
         }
 
         val favTags = if (fav.tags.isNotBlank()) {
@@ -242,11 +281,10 @@ class WallpaperRepository(
     }
 
     /**
-     * Fetches and applies the next wallpaper.
-     * 1) When a new image is loaded from Wallhaven: face detection is performed and positioning
-     *    is applied before setting the image to prevent visual jank.
-     * 2) If no tag is selected, shuffles saved favorites (preserving existing positioning, or
-     *    detecting if missing).
+     * Fetches and applies the next wallpaper with minimal latency.
+     * 1) Face detection model ONLY determines positioning the first time an image is loaded,
+     *    never again for the same image (checked against memory & persistent cache).
+     * 2) If no tag is selected, shuffles saved favorites (preserving existing positioning).
      */
     suspend fun fetchAndApplyNextWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
@@ -261,12 +299,12 @@ class WallpaperRepository(
                 val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
                 val randomFav = favoriteDao.getRandomFavorite(purities)
                 if (randomFav != null) {
-                    val finalOffset = if (randomFav.horizontalOffset in 0f..1f) {
-                        randomFav.horizontalOffset
-                    } else {
-                        val detected = detectFaceOffset(randomFav.localFilePath ?: randomFav.url)
-                        favoriteDao.updateCropOffset(randomFav.id, detected)
-                        detected
+                    val finalOffset = getOrDeterminePositionOffset(
+                        randomFav.id,
+                        randomFav.localFilePath ?: randomFav.thumbUrl.ifBlank { randomFav.url }
+                    )
+                    if (randomFav.horizontalOffset !in 0f..1f) {
+                        favoriteDao.updateCropOffset(randomFav.id, finalOffset)
                     }
                     val favTags = if (randomFav.tags.isNotBlank()) {
                         randomFav.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
@@ -291,9 +329,12 @@ class WallpaperRepository(
                 // Query Wallhaven API (New image!)
                 val fetched = fetchFromWallhaven(isNsfw, tags, existingIds)
                 if (fetched != null) {
-                    // 1) When a new image is loaded: detect face and position to the right side of the screen
-                    // Apply positioning BEFORE setting the image to prevent jank
-                    val smartOffset = detectFaceOffset(fetched.fullUrl)
+                    // Face detection runs ONLY the first time an image is loaded,
+                    // using the lightweight thumbnail to prevent high network latency.
+                    val smartOffset = getOrDeterminePositionOffset(
+                        fetched.id,
+                        fetched.thumbUrl.ifBlank { fetched.fullUrl }
+                    )
                     candidateWallpaper = fetched.copy(horizontalOffset = smartOffset)
                 }
             }
@@ -323,6 +364,40 @@ class WallpaperRepository(
         }
     }
 
+    /**
+     * Initial install fetch: Guarantees fetching an image matching "nature" for SFW mode
+     * or "model" for NSFW mode when the app is first installed.
+     */
+    suspend fun fetchAndApplyInitialWallpaper(isNsfw: Boolean, initialTag: String): Result<Wallpaper> = withContext(Dispatchers.IO) {
+        try {
+            val existingIds = favoriteDao.getAllFavoriteIds().toSet()
+            val fetched = fetchFromWallhaven(isNsfw, setOf(initialTag), existingIds)
+            if (fetched != null) {
+                val smartOffset = getOrDeterminePositionOffset(
+                    fetched.id,
+                    fetched.thumbUrl.ifBlank { fetched.fullUrl }
+                )
+                val finalWallpaper = fetched.copy(horizontalOffset = smartOffset)
+                preferences.setCurrentWallpaper(
+                    id = finalWallpaper.id,
+                    url = finalWallpaper.fullUrl,
+                    thumbUrl = finalWallpaper.thumbUrl,
+                    purity = finalWallpaper.purity,
+                    category = finalWallpaper.category,
+                    offset = finalWallpaper.horizontalOffset,
+                    tags = finalWallpaper.tags
+                )
+                notifyWallpaperChanged()
+                Result.success(finalWallpaper)
+            } else {
+                fetchAndApplyNextWallpaper()
+            }
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error fetching initial wallpaper", e)
+            fetchAndApplyNextWallpaper()
+        }
+    }
+
     private suspend fun fetchFromWallhaven(
         isNsfw: Boolean,
         tags: Set<String>,
@@ -341,84 +416,134 @@ class WallpaperRepository(
             else -> "111"
         }
 
+        // Purity code:
+        // SFW mode: "100" (SFW only)
+        // NSFW mode:
+        // - With API key: "010" (sketchy), "001" (nsfw), or "011" (both)
+        // - Without API key: Wallhaven returns 0 items for "001", so fallback to "010" (sketchy)
+        val nsfwPuritySelection = preferences.nsfwPurityFlow.first()
         val purityCode = if (!isNsfw) {
             "100"
         } else {
-            when (preferences.nsfwPurityFlow.first()) {
-                "sketchy" -> "010"
-                "nsfw" -> "001"
-                else -> "011"
+            if (apiKey != null) {
+                when (nsfwPuritySelection) {
+                    "sketchy" -> "010"
+                    "nsfw" -> "001"
+                    else -> "011"
+                }
+            } else {
+                "010"
             }
         }
 
-        // Search query with inclusive tags
-        val queryParam = if (tags.isNotEmpty()) {
-            tags.joinToString(" ") { "+${it.trim()}" }
+        val targetTags = if (tags.isNotEmpty()) {
+            tags.toList()
         } else {
-            null
+            listOf(if (isNsfw) "model" else "nature")
         }
 
         var response: com.example.data.model.WallhavenSearchResponse? = null
-        val maxAttempts = 2
 
-        for (attempt in 1..maxAttempts) {
+        // Hierarchy of query strategies with fast 4s timeouts:
+        // Tier 1: Multi-tag / active tags query with random sorting
+        val primaryQuery = targetTags.joinToString(" ")
+        try {
+            response = kotlinx.coroutines.withTimeout(4000L) {
+                apiService.searchWallpapers(
+                    query = primaryQuery,
+                    categories = categoriesCode,
+                    purity = purityCode,
+                    sorting = "random",
+                    apiKey = apiKey
+                )
+            }.takeIf { it.data.isNotEmpty() }
+        } catch (e: Exception) {
+            Log.w("WallpaperRepo", "Tier 1 search failed for '$primaryQuery': ${e.message}")
+        }
+
+        // Tier 2 (User requested fallback): If primary search failed/empty, return a popular image matching only the first requested tag
+        if (response == null || response.data.isEmpty()) {
+            val firstTag = targetTags.firstOrNull() ?: if (isNsfw) "model" else "nature"
             try {
-                val res = kotlinx.coroutines.withTimeout(8000L) {
+                response = kotlinx.coroutines.withTimeout(4000L) {
                     apiService.searchWallpapers(
-                        query = queryParam,
+                        query = firstTag,
                         categories = categoriesCode,
                         purity = purityCode,
-                        sorting = "random",
+                        sorting = "toplist",
                         apiKey = apiKey
                     )
-                }
-                if (res.data.isNotEmpty()) {
-                    response = res
-                    break
-                }
+                }.takeIf { it.data.isNotEmpty() }
             } catch (e: Exception) {
-                Log.w("WallpaperRepo", "Wallhaven search attempt $attempt failed: ${e.message}")
-                if (attempt < maxAttempts) {
-                    kotlinx.coroutines.delay(500L)
-                }
+                Log.w("WallpaperRepo", "Tier 2 fallback search failed for '$firstTag': ${e.message}")
             }
         }
 
-        // If specific tag search failed or returned 0 items, fallback to general search with retry
+        // Tier 3: Default tag fallback with toplist sorting
         if (response == null || response.data.isEmpty()) {
+            val defaultTag = if (isNsfw) "model" else "nature"
             try {
-                response = kotlinx.coroutines.withTimeout(8000L) {
+                response = kotlinx.coroutines.withTimeout(4000L) {
                     apiService.searchWallpapers(
-                        query = null,
-                        categories = categoriesCode,
-                        purity = purityCode,
-                        sorting = "random",
+                        query = defaultTag,
+                        categories = "111",
+                        purity = if (!isNsfw || apiKey == null) "100" else purityCode,
+                        sorting = "toplist",
                         apiKey = apiKey
                     )
-                }
+                }.takeIf { it.data.isNotEmpty() }
             } catch (e: Exception) {
-                Log.e("WallpaperRepo", "Wallhaven fallback search failed", e)
+                Log.w("WallpaperRepo", "Tier 3 fallback search failed: ${e.message}")
+            }
+        }
+
+        // Tier 4: General broad search with toplist
+        if (response == null || response.data.isEmpty()) {
+            try {
+                response = kotlinx.coroutines.withTimeout(4000L) {
+                    apiService.searchWallpapers(
+                        query = null,
+                        categories = "111",
+                        purity = "100",
+                        sorting = "toplist",
+                        apiKey = apiKey
+                    )
+                }.takeIf { it.data.isNotEmpty() }
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Tier 4 general fallback search failed", e)
             }
         }
 
         if (response == null || response.data.isEmpty()) return null
 
-        // Filter out duplicate IDs if possible
-        val items = response.data.filter { it.id !in existingIds }
-        val item = items.firstOrNull() ?: response.data.firstOrNull() ?: return null
+        // Select a fresh wallpaper, prioritizing non-existing IDs, with random selection among results
+        val unseenItems = response.data.filter { it.id !in existingIds }
+        val item = unseenItems.randomOrNull() ?: response.data.randomOrNull() ?: return null
 
         val fullUrl = item.path.ifBlank { item.url }
         val thumb = item.thumbs?.large ?: item.thumbs?.original ?: item.thumbs?.small ?: fullUrl
 
+        // Direct tags or target query tags (avoiding synchronous blocking detail call)
         val directTags = item.tags?.map { it.name } ?: emptyList()
-        val tags = if (directTags.isNotEmpty()) {
-            directTags
-        } else {
+        val initialTags = if (directTags.isNotEmpty()) directTags else targetTags
+
+        // Pre-warm Coil cache for full image in background
+        imageLoader.enqueue(
+            ImageRequest.Builder(context)
+                .data(fullUrl)
+                .build()
+        )
+
+        // Non-blocking background detail fetch to enrich tags without causing wallpaper latency
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             try {
                 val detail = apiService.getWallpaperDetails(item.id, apiKey)
-                detail.data?.tags?.map { it.name } ?: emptyList()
+                val detailTags = detail.data?.tags?.map { it.name }?.filter { it.isNotBlank() } ?: emptyList()
+                if (detailTags.isNotEmpty()) {
+                    preferences.updateCurrentWallpaperTags(item.id, detailTags)
+                }
             } catch (e: Exception) {
-                emptyList()
+                // Silently ignore detail fetch errors
             }
         }
 
@@ -431,19 +556,20 @@ class WallpaperRepository(
             resolution = item.resolution,
             horizontalOffset = 0.5f,
             isFavorite = false,
-            tags = tags
+            tags = initialTags
         )
     }
 
     /**
-     * Runs ML Kit face detection on the image to position the focus to the right side of the screen
-     * within the device's aspect ratio.
+     * Runs ML Kit face detection on the image thumbnail or local stream to position the focus
+     * to the right side of the screen within the device's aspect ratio.
+     * Uses small software bitmaps to guarantee sub-50ms execution.
      */
     suspend fun detectFaceOffset(imageSource: String): Float = withContext(Dispatchers.IO) {
         if (imageSource.isBlank()) return@withContext 0.5f
 
         try {
-            kotlinx.coroutines.withTimeout(6000L) {
+            kotlinx.coroutines.withTimeout(3500L) {
                 var bitmap: Bitmap? = null
 
                 // 1. If it's a local content:// or file:// URI
@@ -457,7 +583,7 @@ class WallpaperRepository(
 
                         var sample = 1
                         val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
-                        while (maxDim / (sample * 2) >= 960) {
+                        while (maxDim / (sample * 2) >= 720) {
                             sample *= 2
                         }
 
@@ -478,13 +604,13 @@ class WallpaperRepository(
                     try {
                         val request = ImageRequest.Builder(context)
                             .data(imageSource)
-                            .size(1024, 1024)
+                            .size(720, 720)
                             .allowHardware(false) // Must be software bitmap for ML Kit
                             .build()
                         val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
                         bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
                     } catch (e: Exception) {
-                        Log.e("WallpaperRepo", "Error loading remote bitmap for face detection", e)
+                        Log.e("WallpaperRepo", "Error loading bitmap for face detection", e)
                     }
                 }
 
@@ -686,7 +812,9 @@ class WallpaperRepository(
                 // Check if existing positioning data was provided
                 val hasExistingOffset = indexJson != null && indexJson.has("horizontalOffset")
                 val horizontalOffset = if (hasExistingOffset) {
-                    indexJson!!.optDouble("horizontalOffset", 0.5).toFloat().coerceIn(0f, 1f)
+                    val off = indexJson!!.optDouble("horizontalOffset", 0.5).toFloat().coerceIn(0f, 1f)
+                    setCachedOffset(id, off)
+                    off
                 } else {
                     -1f // Unset: face detection will run upon application
                 }

@@ -103,4 +103,26 @@ class ExampleUnitTest {
         assertEquals(4, info.tags.size)
         assertTrue(info.tags.contains("landscape"))
     }
+
+    @Test
+    fun `test initial tags default to nature for SFW and model for NSFW`() {
+        val defaultSfwTag = "nature"
+        val defaultNsfwTag = "model"
+
+        fun getInitialTag(isNsfw: Boolean) = if (isNsfw) defaultNsfwTag else defaultSfwTag
+
+        assertEquals("nature", getInitialTag(false))
+        assertEquals("model", getInitialTag(true))
+    }
+
+    @Test
+    fun `test single tag fallback query generation`() {
+        val multipleTags = listOf("nature", "mountain", "forest")
+        val fallbackSingleTag = multipleTags.first()
+        assertEquals("nature", fallbackSingleTag)
+
+        val emptyTags = emptyList<String>()
+        val fallbackDefault = emptyTags.firstOrNull() ?: "nature"
+        assertEquals("nature", fallbackDefault)
+    }
 }

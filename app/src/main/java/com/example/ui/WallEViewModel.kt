@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -57,7 +58,22 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             repository.isNsfwMode.collect { nsfw -> _uiState.value = _uiState.value.copy(isNsfwMode = nsfw) }
         }
         viewModelScope.launch {
-            repository.currentWallpaper.collect { current -> _uiState.value = _uiState.value.copy(currentWallpaper = current) }
+            repository.currentWallpaper.collect { current ->
+                _uiState.value = _uiState.value.copy(
+                    currentWallpaper = current,
+                    isLoading = if (current.url.isNotBlank()) false else _uiState.value.isLoading
+                )
+            }
+        }
+        viewModelScope.launch {
+            val current = repository.currentWallpaper.first()
+            if (current.url.isBlank()) {
+                _uiState.value = _uiState.value.copy(isLoading = true)
+                val isNsfw = preferences.isNsfwModeFlow.first()
+                val targetTag = if (isNsfw) "model" else "nature"
+                repository.fetchAndApplyInitialWallpaper(isNsfw, targetTag)
+                _uiState.value = _uiState.value.copy(isLoading = false)
+            }
         }
         viewModelScope.launch {
             repository.savedSfwTags.collect { tags -> _uiState.value = _uiState.value.copy(savedSfwTags = tags) }

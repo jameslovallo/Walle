@@ -250,6 +250,15 @@ class AppPreferences(private val context: Context) {
         }
     }
 
+    suspend fun updateCurrentWallpaperTags(id: String, tags: List<String>) {
+        if (id.isBlank() || tags.isEmpty()) return
+        context.dataStore.edit {
+            if (it[KEY_CURRENT_ID] == id) {
+                it[KEY_CURRENT_TAGS] = tags.joinToString(",")
+            }
+        }
+    }
+
     suspend fun addDeletedWallpaperId(id: String) {
         if (id.isBlank()) return
         context.dataStore.edit {

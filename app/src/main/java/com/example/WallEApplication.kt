@@ -36,10 +36,12 @@ class WallEApplication : Application(), ImageLoaderFactory {
             val interval = preferences.intervalMinutesFlow.first()
             WallpaperIntervalWorker.scheduleNext(this@WallEApplication, interval)
 
-            // If current wallpaper is empty, fetch initial wallpaper
+            // When the app first loads after being installed, fetch an image matching the nature tag for sfw or the model tag for nsfw
             val current = preferences.currentWallpaperFlow.first()
             if (current.url.isBlank()) {
-                repository.fetchAndApplyNextWallpaper()
+                val isNsfw = preferences.isNsfwModeFlow.first()
+                val targetTag = if (isNsfw) "model" else "nature"
+                repository.fetchAndApplyInitialWallpaper(isNsfw, targetTag)
             }
         }
     }
