@@ -101,19 +101,19 @@ class AppPreferences(private val context: Context) {
     }
 
     val savedSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_SAVED_SFW_TAGS] ?: setOf("nature", "landscape", "cyberpunk", "minimalism", "space", "city", "digital art", "neon")
+        it[KEY_SAVED_SFW_TAGS] ?: setOf("nature")
     }
 
     val activeSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_ACTIVE_SFW_TAGS] ?: setOf("nature", "cyberpunk", "minimalism")
+        it[KEY_ACTIVE_SFW_TAGS] ?: setOf("nature")
     }
 
     val savedNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_SAVED_NSFW_TAGS] ?: setOf("portrait", "cosplay", "boudoir", "bikini", "sensual", "model", "aesthetic", "glamour")
+        it[KEY_SAVED_NSFW_TAGS] ?: setOf("model")
     }
 
     val activeNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_ACTIVE_NSFW_TAGS] ?: setOf("portrait", "cosplay", "model")
+        it[KEY_ACTIVE_NSFW_TAGS] ?: setOf("model")
     }
 
     val sfwTagsFlow: Flow<Set<String>> get() = activeSfwTagsFlow

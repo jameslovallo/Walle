@@ -110,10 +110,7 @@ class WallpaperRepository(
     suspend fun deleteFavorite(id: String) = withContext(Dispatchers.IO) {
         if (id.isBlank()) return@withContext
 
-        // 1. Add to permanent deleted list to avoid re-circulation from Wallhaven or folder sync
-        preferences.addDeletedWallpaperId(id)
-
-        // 2. Remove from Room DB
+        // 1. Remove from Room DB
         favoriteDao.deleteById(id)
 
         // 3. Remove internal thumbnail
@@ -256,8 +253,6 @@ class WallpaperRepository(
             val isNsfw = preferences.isNsfwModeFlow.first()
             val tags = if (isNsfw) preferences.nsfwTagsFlow.first() else preferences.sfwTagsFlow.first()
             val existingIds = favoriteDao.getAllFavoriteIds().toSet()
-            val deletedIds = preferences.deletedWallpaperIdsFlow.first()
-            val excludedIds = existingIds + deletedIds
 
             var candidateWallpaper: Wallpaper? = null
 
@@ -265,7 +260,7 @@ class WallpaperRepository(
                 // If no tag is selected, shuffled photos saved from favorites
                 val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
                 val randomFav = favoriteDao.getRandomFavorite(purities)
-                if (randomFav != null && randomFav.id !in deletedIds) {
+                if (randomFav != null) {
                     val finalOffset = if (randomFav.horizontalOffset in 0f..1f) {
                         randomFav.horizontalOffset
                     } else {
@@ -294,7 +289,7 @@ class WallpaperRepository(
 
             if (candidateWallpaper == null) {
                 // Query Wallhaven API (New image!)
-                val fetched = fetchFromWallhaven(isNsfw, tags, excludedIds)
+                val fetched = fetchFromWallhaven(isNsfw, tags, existingIds)
                 if (fetched != null) {
                     // 1) When a new image is loaded: detect face and position to the right side of the screen
                     // Apply positioning BEFORE setting the image to prevent jank
@@ -363,24 +358,50 @@ class WallpaperRepository(
             null
         }
 
-        var response = apiService.searchWallpapers(
-            query = queryParam,
-            categories = categoriesCode,
-            purity = purityCode,
-            sorting = "random",
-            apiKey = apiKey
-        )
+        var response: com.example.data.model.WallhavenSearchResponse? = null
+        val maxAttempts = 2
 
-        // If specific tag search returned 0 items, fallback to general search so wallpapers always load
-        if (response.data.isEmpty() && queryParam != null) {
-            response = apiService.searchWallpapers(
-                query = null,
-                categories = categoriesCode,
-                purity = purityCode,
-                sorting = "random",
-                apiKey = apiKey
-            )
+        for (attempt in 1..maxAttempts) {
+            try {
+                val res = kotlinx.coroutines.withTimeout(8000L) {
+                    apiService.searchWallpapers(
+                        query = queryParam,
+                        categories = categoriesCode,
+                        purity = purityCode,
+                        sorting = "random",
+                        apiKey = apiKey
+                    )
+                }
+                if (res.data.isNotEmpty()) {
+                    response = res
+                    break
+                }
+            } catch (e: Exception) {
+                Log.w("WallpaperRepo", "Wallhaven search attempt $attempt failed: ${e.message}")
+                if (attempt < maxAttempts) {
+                    kotlinx.coroutines.delay(500L)
+                }
+            }
         }
+
+        // If specific tag search failed or returned 0 items, fallback to general search with retry
+        if (response == null || response.data.isEmpty()) {
+            try {
+                response = kotlinx.coroutines.withTimeout(8000L) {
+                    apiService.searchWallpapers(
+                        query = null,
+                        categories = categoriesCode,
+                        purity = purityCode,
+                        sorting = "random",
+                        apiKey = apiKey
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Wallhaven fallback search failed", e)
+            }
+        }
+
+        if (response == null || response.data.isEmpty()) return null
 
         // Filter out duplicate IDs if possible
         val items = response.data.filter { it.id !in existingIds }
@@ -422,61 +443,63 @@ class WallpaperRepository(
         if (imageSource.isBlank()) return@withContext 0.5f
 
         try {
-            var bitmap: Bitmap? = null
+            kotlinx.coroutines.withTimeout(6000L) {
+                var bitmap: Bitmap? = null
 
-            // 1. If it's a local content:// or file:// URI
-            if (imageSource.startsWith("content://") || imageSource.startsWith("file://")) {
-                try {
-                    val uri = Uri.parse(imageSource)
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        BitmapFactory.decodeStream(input, null, bounds)
-                    }
+                // 1. If it's a local content:// or file:// URI
+                if (imageSource.startsWith("content://") || imageSource.startsWith("file://")) {
+                    try {
+                        val uri = Uri.parse(imageSource)
+                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            BitmapFactory.decodeStream(input, null, bounds)
+                        }
 
-                    var sample = 1
-                    val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
-                    while (maxDim / (sample * 2) >= 960) {
-                        sample *= 2
-                    }
+                        var sample = 1
+                        val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+                        while (maxDim / (sample * 2) >= 960) {
+                            sample *= 2
+                        }
 
-                    val opts = BitmapFactory.Options().apply {
-                        inSampleSize = sample
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                        val opts = BitmapFactory.Options().apply {
+                            inSampleSize = sample
+                            inPreferredConfig = Bitmap.Config.ARGB_8888
+                        }
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            bitmap = BitmapFactory.decodeStream(input, null, opts)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("WallpaperRepo", "Error decoding local bitmap for face detection", e)
                     }
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        bitmap = BitmapFactory.decodeStream(input, null, opts)
-                    }
-                } catch (e: Exception) {
-                    Log.e("WallpaperRepo", "Error decoding local bitmap for face detection", e)
                 }
-            }
 
-            // 2. If it's a remote URL or local decoding failed
-            if (bitmap == null) {
-                try {
-                    val request = ImageRequest.Builder(context)
-                        .data(imageSource)
-                        .size(1024, 1024)
-                        .allowHardware(false) // Must be software bitmap for ML Kit
-                        .build()
-                    val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
-                    bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
-                } catch (e: Exception) {
-                    Log.e("WallpaperRepo", "Error loading remote bitmap for face detection", e)
+                // 2. If it's a remote URL or local decoding failed
+                if (bitmap == null) {
+                    try {
+                        val request = ImageRequest.Builder(context)
+                            .data(imageSource)
+                            .size(1024, 1024)
+                            .allowHardware(false) // Must be software bitmap for ML Kit
+                            .build()
+                        val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
+                        bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                    } catch (e: Exception) {
+                        Log.e("WallpaperRepo", "Error loading remote bitmap for face detection", e)
+                    }
                 }
-            }
 
-            val finalBitmap = bitmap
-            if (finalBitmap != null) {
-                val metrics = context.resources.displayMetrics
-                val deviceAspect = if (metrics.heightPixels > 0) {
-                    metrics.widthPixels.toFloat() / metrics.heightPixels.toFloat()
+                val finalBitmap = bitmap
+                if (finalBitmap != null) {
+                    val metrics = context.resources.displayMetrics
+                    val deviceAspect = if (metrics.heightPixels > 0) {
+                        metrics.widthPixels.toFloat() / metrics.heightPixels.toFloat()
+                    } else {
+                        9f / 19.5f
+                    }
+                    FaceDetectorHelper.calculateSmartCropOffset(finalBitmap, deviceAspect)
                 } else {
-                    9f / 19.5f
+                    0.5f
                 }
-                FaceDetectorHelper.calculateSmartCropOffset(finalBitmap, deviceAspect)
-            } else {
-                0.5f
             }
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error in detectFaceOffset", e)
@@ -581,6 +604,15 @@ class WallpaperRepository(
             val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext
             if (!rootDoc.canRead()) return@withContext
 
+            // Ensure .nomedia in root to prevent recent files clutter
+            if (rootDoc.canWrite() && rootDoc.findFile(".nomedia") == null) {
+                try {
+                    rootDoc.createFile("application/octet-stream", ".nomedia")
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            }
+
             val indexedItemsMap = mutableMapOf<String, JSONObject>()
 
             // 1. Read existing index.json if present
@@ -639,9 +671,8 @@ class WallpaperRepository(
             }
 
             // 3. Process each item:
-            // Combine items from index.json and scanned files, skipping permanently deleted items
-            val deletedIds = preferences.deletedWallpaperIdsFlow.first()
-            val allIds = (indexedItemsMap.keys + discoveredFiles.keys).distinct().filter { it !in deletedIds }
+            // Combine items from index.json and scanned files
+            val allIds = (indexedItemsMap.keys + discoveredFiles.keys).distinct()
 
             for (id in allIds) {
                 val indexJson = indexedItemsMap[id]
@@ -704,10 +735,28 @@ class WallpaperRepository(
             val folderUri = Uri.parse(folderUriString)
             val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext
 
+            // Ensure .nomedia in root folder to prevent cluttering recent files in files app
+            if (rootDoc.findFile(".nomedia") == null) {
+                try {
+                    rootDoc.createFile("application/octet-stream", ".nomedia")
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            }
+
             val subfolderName = if (fav.purity == "sfw") "sfw" else "nsfw"
             var subDir = rootDoc.findFile(subfolderName)
             if (subDir == null || !subDir.isDirectory) {
                 subDir = rootDoc.createDirectory(subfolderName) ?: return@withContext
+            }
+
+            // Ensure .nomedia in subfolder
+            if (subDir.findFile(".nomedia") == null) {
+                try {
+                    subDir.createFile("application/octet-stream", ".nomedia")
+                } catch (e: Exception) {
+                    // Ignore
+                }
             }
 
             // Determine extension (.png or .jpg) from url

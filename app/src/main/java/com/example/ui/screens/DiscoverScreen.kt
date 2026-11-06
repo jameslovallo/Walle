@@ -375,7 +375,9 @@ fun DiscoverScreen(
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                             selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary
                         ),
-                        modifier = Modifier.testTag("tag_chip_$tag")
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("tag_chip_$tag")
                     )
                 }
             }

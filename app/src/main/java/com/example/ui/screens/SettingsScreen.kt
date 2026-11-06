@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -489,6 +490,22 @@ fun SettingsScreen(
                     )
                 }
 
+                // Local User Folder Picker (Moved above API Key)
+                OutlinedButton(
+                    onClick = { folderPickerLauncher.launch(null) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("select_folder_button"),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        if (uiState.localFolderUri.isNotBlank()) "Save Folder Selected" else "Select Save Folder"
+                    )
+                }
+
                 // Wallhaven API Key input
                 OutlinedTextField(
                     value = uiState.apiKey,
@@ -503,19 +520,34 @@ fun SettingsScreen(
                     shape = RoundedCornerShape(14.dp)
                 )
 
-                // Local User Folder Picker
-                OutlinedButton(
-                    onClick = { folderPickerLauncher.launch(null) },
+                // Direct link to Wallhaven Account Settings
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        try {
+                            val browserIntent = Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse("https://wallhaven.cc/settings/account")
+                            ).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(browserIntent)
+                        } catch (e: Exception) {
+                            // Ignore
+                        }
+                    },
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("select_folder_button"),
-                    shape = RoundedCornerShape(14.dp)
+                        .align(Alignment.End)
+                        .testTag("wallhaven_account_link")
                 ) {
-                    Icon(Icons.Default.Folder, contentDescription = null)
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        if (uiState.localFolderUri.isNotBlank()) "Save Folder Selected" else "Select Save Folder"
+                        text = "Get API Key (wallhaven.cc)",
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
             }

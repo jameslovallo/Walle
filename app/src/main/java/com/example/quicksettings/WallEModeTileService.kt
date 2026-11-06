@@ -48,9 +48,11 @@ class WallEModeTileService : TileService() {
     private fun updateTileDisplay(isNsfw: Boolean) {
         val tile = qsTile ?: return
         tile.state = if (isNsfw) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        tile.label = "Wall-e"
+        tile.label = if (isNsfw) "Wall-e NSFW" else "Wall-e SFW"
+        val iconRes = if (isNsfw) com.example.R.drawable.ic_qs_nsfw else com.example.R.drawable.ic_qs_sfw
+        tile.icon = android.graphics.drawable.Icon.createWithResource(this, iconRes)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = if (isNsfw) "NSFW" else "SFW"
+            tile.subtitle = if (isNsfw) "NSFW Mode" else "SFW Mode"
         }
         tile.updateTile()
     }
