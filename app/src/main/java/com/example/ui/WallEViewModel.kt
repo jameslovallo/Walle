@@ -8,6 +8,7 @@ import com.example.WallEApplication
 import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.ModeFilterSettings
+import com.example.data.model.Wallpaper
 import com.example.worker.WallpaperIntervalWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,6 +24,18 @@ data class WallEUIState(
     val currentWallpaper: CurrentWallpaperInfo = CurrentWallpaperInfo(),
     val isCurrentFavorite: Boolean = false,
     val isLoading: Boolean = false,
+    // Discover Grid & Search State
+    val discoverWallpapers: List<Wallpaper> = emptyList(),
+    val discoverQuery: String = "nature",
+    val discoverCategory: String = "all", // "all", "anime", "people"
+    val discoverPurity: String = "both",  // "both", "sketchy", "nsfw"
+    val isDiscoverLoading: Boolean = false,
+    val isDiscoverLoadingMore: Boolean = false,
+    val discoverCurrentPage: Int = 1,
+    val discoverLastPage: Int = 1,
+    val discoverTotal: Int = 0,
+    val discoverHasReachedEnd: Boolean = false,
+    // Legacy tags & mode filters
     val savedSfwTags: Set<String> = emptySet(),
     val activeSfwTags: Set<String> = emptySet(),
     val savedNsfwTags: Set<String> = emptySet(),
@@ -35,7 +48,8 @@ data class WallEUIState(
     val apiKey: String = "",
     val intervalMinutes: Int = 60,
     val localFolderUri: String = "",
-    val isScheduleEnabled: Boolean = true
+    val isScheduleEnabled: Boolean = true,
+    val isSlideshowPaused: Boolean = false
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -123,6 +137,12 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        viewModelScope.launch {
+            preferences.isSlideshowPausedFlow.collect { paused ->
+                _uiState.value = _uiState.value.copy(isSlideshowPaused = paused)
+            }
+        }
+
         // Keep current favorite status in sync
         viewModelScope.launch {
             repository.currentWallpaper.flatMapLatest { current ->
@@ -131,78 +151,203 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value.copy(isCurrentFavorite = isFav)
             }
         }
+
+        // Initial search for Discover grid
+        viewModelScope.launch {
+            val isNsfw = preferences.isNsfwModeFlow.first()
+            val initialCat = if (isNsfw) "people" else "all"
+            val initialPurity = "both"
+            val initialQuery = if (isNsfw) "model" else "nature"
+            _uiState.value = _uiState.value.copy(
+                isNsfwMode = isNsfw,
+                discoverCategory = initialCat,
+                discoverPurity = initialPurity,
+                discoverQuery = initialQuery
+            )
+            performSearch(initialQuery)
+        }
+    }
+
+    fun onSearchQueryChange(query: String) {
+        _uiState.value = _uiState.value.copy(discoverQuery = query)
+    }
+
+    fun performSearch(customQuery: String? = null) {
+        val q = customQuery ?: _uiState.value.discoverQuery
+        _uiState.value = _uiState.value.copy(
+            discoverQuery = q,
+            discoverCurrentPage = 1,
+            discoverHasReachedEnd = false,
+            isDiscoverLoading = true
+        )
+        viewModelScope.launch {
+            val isNsfw = _uiState.value.isNsfwMode
+            val cat = _uiState.value.discoverCategory
+            val purity = _uiState.value.discoverPurity
+            val res = repository.searchWallpapersPaged(
+                query = q,
+                category = cat,
+                purity = purity,
+                isNsfwMode = isNsfw,
+                page = 1
+            )
+            res.onSuccess { searchRes ->
+                val hasReachedEnd = searchRes.currentPage >= searchRes.lastPage || searchRes.wallpapers.isEmpty()
+                _uiState.value = _uiState.value.copy(
+                    discoverWallpapers = searchRes.wallpapers,
+                    discoverCurrentPage = searchRes.currentPage,
+                    discoverLastPage = searchRes.lastPage,
+                    discoverTotal = searchRes.total,
+                    discoverHasReachedEnd = hasReachedEnd,
+                    isDiscoverLoading = false
+                )
+            }.onFailure {
+                _uiState.value = _uiState.value.copy(
+                    discoverWallpapers = emptyList(),
+                    discoverHasReachedEnd = true,
+                    isDiscoverLoading = false
+                )
+            }
+        }
+    }
+
+    fun loadNextPage() {
+        val state = _uiState.value
+        if (state.isDiscoverLoading || state.isDiscoverLoadingMore || state.discoverHasReachedEnd) return
+        val nextPage = state.discoverCurrentPage + 1
+        if (nextPage > state.discoverLastPage) {
+            _uiState.value = _uiState.value.copy(discoverHasReachedEnd = true)
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(isDiscoverLoadingMore = true)
+        viewModelScope.launch {
+            val res = repository.searchWallpapersPaged(
+                query = state.discoverQuery,
+                category = state.discoverCategory,
+                purity = state.discoverPurity,
+                isNsfwMode = state.isNsfwMode,
+                page = nextPage
+            )
+            res.onSuccess { searchRes ->
+                val combined = (state.discoverWallpapers + searchRes.wallpapers).distinctBy { it.id }
+                val hasReachedEnd = searchRes.currentPage >= searchRes.lastPage || searchRes.wallpapers.isEmpty()
+                _uiState.value = _uiState.value.copy(
+                    discoverWallpapers = combined,
+                    discoverCurrentPage = searchRes.currentPage,
+                    discoverLastPage = searchRes.lastPage,
+                    discoverTotal = searchRes.total,
+                    discoverHasReachedEnd = hasReachedEnd,
+                    isDiscoverLoadingMore = false
+                )
+            }.onFailure {
+                _uiState.value = _uiState.value.copy(isDiscoverLoadingMore = false)
+            }
+        }
+    }
+
+    fun setDiscoverCategory(category: String) {
+        _uiState.value = _uiState.value.copy(discoverCategory = category)
+        performSearch()
+    }
+
+    fun setDiscoverPurity(purity: String) {
+        _uiState.value = _uiState.value.copy(discoverPurity = purity)
+        performSearch()
+    }
+
+    fun updateWallpaperOffset(id: String, offset: Float) {
+        val clamped = offset.coerceIn(0f, 1f)
+        val currentList = _uiState.value.discoverWallpapers
+        val updatedList = currentList.map { wp ->
+            if (wp.id == id) wp.copy(horizontalOffset = clamped) else wp
+        }
+        _uiState.value = _uiState.value.copy(discoverWallpapers = updatedList)
+
+        // Save to cache without favoriting
+        viewModelScope.launch {
+            repository.setCachedOffset(id, clamped)
+            if (_uiState.value.currentWallpaper.id == id) {
+                preferences.updateCurrentWallpaperOffset(clamped)
+                repository.notifyWallpaperChanged()
+            }
+        }
+    }
+
+    fun lazyDetectOffset(wallpaper: Wallpaper) {
+        viewModelScope.launch {
+            if (repository.isOffsetCached(wallpaper.id)) {
+                val cached = repository.getCachedOffset(wallpaper.id) ?: 0.5f
+                val currentList = _uiState.value.discoverWallpapers
+                val updated = currentList.map { if (it.id == wallpaper.id) it.copy(horizontalOffset = cached) else it }
+                _uiState.value = _uiState.value.copy(discoverWallpapers = updated)
+                return@launch
+            }
+
+            val detected = repository.lazyDetectOffset(
+                wallpaper.id,
+                wallpaper.thumbUrl.ifBlank { wallpaper.fullUrl }
+            )
+            val currentList = _uiState.value.discoverWallpapers
+            val updated = currentList.map { if (it.id == wallpaper.id) it.copy(horizontalOffset = detected) else it }
+            _uiState.value = _uiState.value.copy(discoverWallpapers = updated)
+        }
+    }
+
+    fun toggleFavoriteWallpaper(wallpaper: Wallpaper) {
+        viewModelScope.launch {
+            val newFavStatus = repository.toggleFavorite(
+                id = wallpaper.id,
+                url = wallpaper.fullUrl,
+                thumbUrl = wallpaper.thumbUrl,
+                purity = wallpaper.purity,
+                category = wallpaper.category,
+                cropOffset = wallpaper.horizontalOffset,
+                tags = wallpaper.tags
+            )
+            val currentList = _uiState.value.discoverWallpapers
+            val updated = currentList.map { if (it.id == wallpaper.id) it.copy(isFavorite = newFavStatus) else it }
+            _uiState.value = _uiState.value.copy(discoverWallpapers = updated)
+        }
+    }
+
+    fun applyWallpaperAsCurrent(wallpaper: Wallpaper) {
+        viewModelScope.launch {
+            preferences.setCurrentWallpaper(
+                id = wallpaper.id,
+                url = wallpaper.fullUrl,
+                thumbUrl = wallpaper.thumbUrl,
+                purity = wallpaper.purity,
+                category = wallpaper.category,
+                offset = wallpaper.horizontalOffset,
+                tags = wallpaper.tags
+            )
+            repository.notifyWallpaperChanged()
+        }
     }
 
     fun toggleMode() {
         val nextMode = !_uiState.value.isNsfwMode
+        val nextCat = if (nextMode) "people" else "all"
+        val nextPurity = "both"
+        val nextQuery = if (nextMode) "model" else "nature"
         viewModelScope.launch {
             preferences.setNsfwMode(nextMode)
-            fetchNextWallpaper()
+            _uiState.value = _uiState.value.copy(
+                isNsfwMode = nextMode,
+                discoverCategory = nextCat,
+                discoverPurity = nextPurity,
+                discoverQuery = nextQuery
+            )
+            performSearch(nextQuery)
         }
     }
 
     fun fetchNextWallpaper() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
-            repository.fetchAndApplyNextWallpaper()
+            repository.applyNextScheduledFavoriteWallpaper()
             _uiState.value = _uiState.value.copy(isLoading = false)
-        }
-    }
-
-    fun toggleTag(tag: String) {
-        viewModelScope.launch {
-            val isNsfw = _uiState.value.isNsfwMode
-            if (isNsfw) {
-                val active = _uiState.value.activeNsfwTags.toMutableSet()
-                if (active.contains(tag)) active.remove(tag) else active.add(tag)
-                preferences.setActiveNsfwTags(active)
-            } else {
-                val active = _uiState.value.activeSfwTags.toMutableSet()
-                if (active.contains(tag)) active.remove(tag) else active.add(tag)
-                preferences.setActiveSfwTags(active)
-            }
-            fetchNextWallpaper()
-        }
-    }
-
-    fun addTag(tag: String) {
-        val cleanTag = tag.trim().lowercase()
-        if (cleanTag.isBlank()) return
-        viewModelScope.launch {
-            val isNsfw = _uiState.value.isNsfwMode
-            if (isNsfw) {
-                val saved = _uiState.value.savedNsfwTags.toMutableSet().apply { add(cleanTag) }
-                val active = _uiState.value.activeNsfwTags.toMutableSet().apply { add(cleanTag) }
-                preferences.setSavedNsfwTags(saved)
-                preferences.setActiveNsfwTags(active)
-            } else {
-                val saved = _uiState.value.savedSfwTags.toMutableSet().apply { add(cleanTag) }
-                val active = _uiState.value.activeSfwTags.toMutableSet().apply { add(cleanTag) }
-                preferences.setSavedSfwTags(saved)
-                preferences.setActiveSfwTags(active)
-            }
-            fetchNextWallpaper()
-        }
-    }
-
-    fun removeTag(tag: String) {
-        viewModelScope.launch {
-            val isNsfw = _uiState.value.isNsfwMode
-            var wasActive = false
-            if (isNsfw) {
-                val saved = _uiState.value.savedNsfwTags.toMutableSet().apply { remove(tag) }
-                val active = _uiState.value.activeNsfwTags.toMutableSet().apply { wasActive = remove(tag) }
-                preferences.setSavedNsfwTags(saved)
-                preferences.setActiveNsfwTags(active)
-            } else {
-                val saved = _uiState.value.savedSfwTags.toMutableSet().apply { remove(tag) }
-                val active = _uiState.value.activeSfwTags.toMutableSet().apply { wasActive = remove(tag) }
-                preferences.setSavedSfwTags(saved)
-                preferences.setActiveSfwTags(active)
-            }
-            if (wasActive) {
-                fetchNextWallpaper()
-            }
         }
     }
 
@@ -227,7 +372,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     fun setNsfwPurity(purity: String) {
         viewModelScope.launch {
             preferences.setNsfwPurity(purity)
-            fetchNextWallpaper()
+            setDiscoverPurity(purity)
         }
     }
 
@@ -238,7 +383,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 preferences.setSfwCategory(category)
             }
-            fetchNextWallpaper()
+            setDiscoverCategory(category)
         }
     }
 

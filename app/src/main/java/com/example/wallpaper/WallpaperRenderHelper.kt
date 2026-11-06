@@ -104,6 +104,74 @@ object WallpaperRenderHelper {
         }
     }
 
+    enum class FeedbackIconType {
+        SKIP,
+        PAUSE,
+        RESUME
+    }
+
+    /**
+     * Draws action feedback icon (Skip, Pause, Resume) on the launcher.
+     */
+    fun drawFeedbackIcon(
+        canvas: Canvas,
+        x: Float,
+        y: Float,
+        type: FeedbackIconType,
+        progress: Float
+    ) {
+        val alpha = ((1.0f - progress).coerceIn(0f, 1f) * 255).toInt()
+        val scale = 1.0f + 0.3f * progress
+        val circleRadius = 48f * scale
+        val iconSize = 44f * scale
+
+        // Draw circular background
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            this.alpha = ((1.0f - progress).coerceIn(0f, 1f) * 165).toInt()
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(x, y, circleRadius, bgPaint)
+
+        // Draw accent ring
+        val ringColor = when (type) {
+            FeedbackIconType.SKIP -> Color.WHITE
+            FeedbackIconType.PAUSE -> Color.parseColor("#FFB74D")
+            FeedbackIconType.RESUME -> Color.parseColor("#81C784")
+        }
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = ringColor
+            this.alpha = ((1.0f - progress).coerceIn(0f, 1f) * 200).toInt()
+            strokeWidth = 3f * scale
+            style = Paint.Style.STROKE
+        }
+        canvas.drawCircle(x, y, circleRadius, strokePaint)
+
+        val pathData = when (type) {
+            FeedbackIconType.SKIP -> "M6,18L14.5,12L6,6V18M16,6V18H18V6H16Z"
+            FeedbackIconType.PAUSE -> "M14,19H18V5H14M6,19H10V5H6V19Z"
+            FeedbackIconType.RESUME -> "M8,5.14V19.14L19,12.14L8,5.14Z"
+        }
+
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            this.alpha = alpha
+            style = Paint.Style.FILL
+        }
+
+        canvas.save()
+        canvas.translate(x, y)
+        val path = PathParser.createPathFromPathData(pathData)
+        val s = iconSize / 24f
+        val matrix = Matrix().apply {
+            postTranslate(-12f, -12f)
+            postScale(s, s)
+        }
+        path.transform(matrix)
+        canvas.drawPath(path, paint)
+        canvas.restore()
+    }
+
     /**
      * Draws the red heart or broken heart feedback icon on the launcher,
      * consistent with the Material Design icons used in the app.

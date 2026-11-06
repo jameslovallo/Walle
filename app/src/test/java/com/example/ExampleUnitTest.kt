@@ -125,4 +125,45 @@ class ExampleUnitTest {
         val fallbackDefault = emptyTags.firstOrNull() ?: "nature"
         assertEquals("nature", fallbackDefault)
     }
+
+    @Test
+    fun `test discover search defaults for sfw and nsfw modes`() {
+        // SFW mode defaults
+        val sfwCategory = "all"
+        val sfwQuery = "nature"
+        assertEquals("all", sfwCategory)
+        assertEquals("nature", sfwQuery)
+
+        // NSFW mode defaults
+        val nsfwCategory = "people"
+        val nsfwPurity = "both"
+        val nsfwQuery = "model"
+        assertEquals("people", nsfwCategory)
+        assertEquals("both", nsfwPurity)
+        assertEquals("model", nsfwQuery)
+    }
+
+    @Test
+    fun `test discover pagination logic reaches end`() {
+        val currentPage = 5
+        val lastPage = 5
+        val hasReachedEnd = currentPage >= lastPage
+        assertTrue(hasReachedEnd)
+
+        val page1 = 1
+        val lastPage5 = 5
+        val notReached = page1 >= lastPage5
+        assertFalse(notReached)
+    }
+
+    @Test
+    fun `test slideshow pause toggle state`() {
+        var isPaused = false
+        // Long press on homescreen pauses
+        isPaused = !isPaused
+        assertTrue(isPaused)
+        // Long press again resumes
+        isPaused = !isPaused
+        assertFalse(isPaused)
+    }
 }

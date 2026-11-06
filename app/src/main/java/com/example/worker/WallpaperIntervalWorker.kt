@@ -21,18 +21,19 @@ class WallpaperIntervalWorker(
         val preferences = app.preferences
 
         val isScheduleEnabled = preferences.isScheduleEnabledFlow.first()
-        if (!isScheduleEnabled) {
+        val isPaused = preferences.isSlideshowPausedFlow.first()
+        if (!isScheduleEnabled || isPaused) {
             return Result.success()
         }
 
         try {
-            repository.fetchAndApplyNextWallpaper()
+            repository.applyNextScheduledFavoriteWallpaper()
         } catch (e: Exception) {
             // Keep going
         }
 
-        // Reschedule next cycle only if schedule is still enabled
-        if (preferences.isScheduleEnabledFlow.first()) {
+        // Reschedule next cycle only if schedule is still enabled and not paused
+        if (preferences.isScheduleEnabledFlow.first() && !preferences.isSlideshowPausedFlow.first()) {
             val intervalMinutes = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
             scheduleNext(applicationContext, intervalMinutes)
         }

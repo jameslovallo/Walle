@@ -12,7 +12,8 @@ interface WallhavenApiService {
         @Query("q") query: String? = null,
         @Query("categories") categories: String? = "111", // general/anime/people
         @Query("purity") purity: String? = "100", // sfw/sketchy/nsfw
-        @Query("sorting") sorting: String = "random",
+        @Query("sorting") sorting: String = "toplist",
+        @Query("page") page: Int = 1,
         @Query("apikey") apiKey: String? = null
     ): WallhavenSearchResponse
 

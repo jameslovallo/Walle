@@ -1,59 +1,53 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SuggestionChip
-import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -62,374 +56,407 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.data.model.WallhavenTags
+import com.example.data.model.Wallpaper
 import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
 import com.example.ui.components.PositionedWallpaperImage
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiscoverScreen(
     viewModel: WallEViewModel,
     uiState: WallEUIState,
     modifier: Modifier = Modifier
 ) {
-    val isNsfw = uiState.isNsfwMode
-    val savedTags = if (isNsfw) uiState.savedNsfwTags else uiState.savedSfwTags
-    val activeTags = if (isNsfw) uiState.activeNsfwTags else uiState.activeSfwTags
-    var tagInputText by remember { mutableStateOf("") }
+    val gridState = rememberLazyGridState()
     val focusManager = LocalFocusManager.current
+    val isNsfw = uiState.isNsfwMode
 
-    val currentImageTags = uiState.currentWallpaper.tags
-    val hasImageTags = currentImageTags.isNotEmpty()
-
-    val autocompleteSuggestions = remember(tagInputText, savedTags) {
-        if (tagInputText.isNotBlank()) {
-            WallhavenTags.getAutocompleteSuggestions(tagInputText, savedTags, limit = 6)
-        } else {
-            emptyList()
+    // Infinite scroll detection: as user scrolls near the end, load the next page
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val lastVisibleItem = gridState.layoutInfo.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf false
+            val totalItems = gridState.layoutInfo.totalItemsCount
+            lastVisibleItem.index >= totalItems - 4 && totalItems > 0
         }
     }
 
-    PullToRefreshBox(
-        isRefreshing = uiState.isLoading,
-        onRefresh = { viewModel.fetchNextWallpaper() },
-        modifier = modifier.fillMaxSize()
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore && !uiState.isDiscoverLoading && !uiState.isDiscoverLoadingMore && !uiState.discoverHasReachedEnd) {
+            viewModel.loadNextPage()
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("discover_screen_container")
     ) {
-        Column(
+        // Main area: Grid showing all results returned by the query
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
-            // Preview & Current Image Tags Section
-            // When tags are present in API response, slide preview card to the left and display tags grid to the right
-            val currentOffset = uiState.currentWallpaper.horizontalOffset
-            var dragOffset by remember(currentOffset) { mutableFloatStateOf(currentOffset) }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(270.dp)
-                    .animateContentSize(),
-                horizontalArrangement = if (hasImageTags) Arrangement.Start else Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Fixed-aspect-ratio Preview Card (with direct horizontal drag positioning)
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .aspectRatio(9f / 18.5f)
-                        .shadow(8.dp, RoundedCornerShape(22.dp))
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .testTag("wallpaper_preview_card")
+            if (uiState.isDiscoverLoading && uiState.discoverWallpapers.isEmpty()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    val url = uiState.currentWallpaper.url
-                    if (url.isNotBlank()) {
-                        PositionedWallpaperImage(
-                            url = url,
-                            horizontalOffset = dragOffset,
-                            fallbackUrl = uiState.currentWallpaper.thumbUrl,
-                            onDrag = { newOffset ->
-                                dragOffset = newOffset
-                                viewModel.updateDragOffset(newOffset)
-                            },
-                            onDragEnd = {
-                                viewModel.commitDragOffset(dragOffset)
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    if (uiState.isLoading) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.35f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(36.dp)
-                            )
-                        }
-                    }
-
-                    // Hovering Bottom-Right: Heart button with dynamic state
-                    val heartContainerColor by animateColorAsState(
-                        targetValue = if (uiState.isCurrentFavorite) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
-                        label = "heart_color"
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(44.dp)
                     )
-                    IconButton(
-                        onClick = { viewModel.toggleCurrentFavorite() },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(10.dp)
-                            .size(42.dp)
-                            .background(heartContainerColor, CircleShape)
-                            .testTag("favorite_toggle_button"),
-                        colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-                    ) {
-                        Icon(
-                            imageVector = if (uiState.isCurrentFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            contentDescription = "Favorite",
-                            modifier = Modifier.size(22.dp)
+                    Text(
+                        text = "Searching WallHaven...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else if (!uiState.isDiscoverLoading && uiState.discoverWallpapers.isEmpty()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SearchOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(56.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "No results found",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Try a different search term or change your filters below.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyVerticalGrid(
+                    state = gridState,
+                    columns = GridCells.Adaptive(minSize = 160.dp),
+                    contentPadding = PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("discover_grid")
+                ) {
+                    items(
+                        items = uiState.discoverWallpapers,
+                        key = { it.id }
+                    ) { wallpaper ->
+                        DiscoverWallpaperCard(
+                            wallpaper = wallpaper,
+                            onDragOffset = { newOffset ->
+                                viewModel.updateWallpaperOffset(wallpaper.id, newOffset)
+                            },
+                            onToggleFavorite = {
+                                viewModel.toggleFavoriteWallpaper(wallpaper)
+                            },
+                            onCardClick = {
+                                viewModel.applyWallpaperAsCurrent(wallpaper)
+                            },
+                            onAppear = {
+                                viewModel.lazyDetectOffset(wallpaper)
+                            }
                         )
                     }
-                }
 
-                // Grid of tags for current image to the right (displayed when tags present in API response)
-                AnimatedVisibility(
-                    visible = hasImageTags,
-                    enter = fadeIn() + expandHorizontally(),
-                    exit = fadeOut() + shrinkHorizontally(),
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(1f)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = 12.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Tag,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Tags",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                    // Loading more spinner at the bottom
+                    if (uiState.isDiscoverLoadingMore) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(32.dp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    strokeWidth = 3.dp
+                                )
+                            }
                         }
+                    }
 
-                        FlowRow(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .testTag("current_image_tags_grid"),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            currentImageTags.forEach { imgTag ->
-                                val isAlreadyActive = activeTags.contains(imgTag.lowercase())
-                                SuggestionChip(
-                                    onClick = {
-                                        viewModel.addTag(imgTag)
-                                    },
-                                    label = {
-                                        Text(
-                                            text = imgTag,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            maxLines = 1
-                                        )
-                                    },
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = SuggestionChipDefaults.suggestionChipColors(
-                                        containerColor = if (isAlreadyActive) {
-                                            MaterialTheme.colorScheme.primaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.surfaceContainerHigh
-                                        },
-                                        labelColor = if (isAlreadyActive) {
-                                            MaterialTheme.colorScheme.onPrimaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurface
-                                        }
-                                    ),
-                                    modifier = Modifier.testTag("current_image_tag_$imgTag")
+                    // End of results message below the grid
+                    if (uiState.discoverHasReachedEnd && uiState.discoverWallpapers.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 20.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "You've reached the end of the results",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
                     }
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Text input above tags grid to add a new tag
-            OutlinedTextField(
-                value = tagInputText,
-                onValueChange = { tagInputText = it },
-                placeholder = { Text("Add tag") },
-                singleLine = true,
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                },
-                trailingIcon = {
-                    if (tagInputText.isNotBlank()) {
-                        IconButton(
-                            onClick = {
-                                viewModel.addTag(tagInputText)
-                                tagInputText = ""
-                                focusManager.clearFocus()
-                            },
-                            modifier = Modifier.testTag("add_tag_icon_button")
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "Add")
-                        }
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        if (tagInputText.isNotBlank()) {
-                            viewModel.addTag(tagInputText)
-                            tagInputText = ""
-                            focusManager.clearFocus()
-                        }
-                    }
-                ),
-                shape = RoundedCornerShape(16.dp),
+        // Pinned Bottom Section - Seamless with bottom navigation
+        Surface(
+            tonalElevation = 3.dp,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("discover_bottom_pinned_section")
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("add_tag_text_input")
-            )
-
-            // Autocomplete suggestions from Wallhaven while typing
-            AnimatedVisibility(
-                visible = autocompleteSuggestions.isNotEmpty(),
-                enter = fadeIn(),
-                exit = fadeOut()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                // Search box
+                OutlinedTextField(
+                    value = uiState.discoverQuery,
+                    onValueChange = { viewModel.onSearchQueryChange(it) },
+                    placeholder = { Text("Search WallHaven...") },
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingIcon = {
+                        if (uiState.discoverQuery.isNotBlank()) {
+                            IconButton(
+                                onClick = {
+                                    viewModel.onSearchQueryChange("")
+                                }
+                            ) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            focusManager.clearFocus()
+                            viewModel.performSearch()
+                        }
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("discover_search_input")
+                )
+
+                // Filter Controls (SFW vs NSFW)
+                if (!isNsfw) {
+                    // SFW Mode: "All / Anime / People" selector
+                    val categoryOptions = listOf("all" to "All", "anime" to "Anime", "people" to "People")
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("sfw_category_segmented_row")
+                    ) {
+                        categoryOptions.forEachIndexed { index, (key, label) ->
+                            SegmentedButton(
+                                selected = uiState.discoverCategory == key,
+                                onClick = {
+                                    viewModel.setDiscoverCategory(key)
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size)
+                            ) {
+                                Text(label)
+                            }
+                        }
+                    }
+                } else {
+                    // NSFW Mode: Two side-by-side dropdowns taking 50% width each
+                    // Category dropdown ("People" default) & Purity dropdown ("Both" default)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            .testTag("nsfw_filter_dropdowns_row"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        autocompleteSuggestions.forEach { suggestion ->
-                            SuggestionChip(
-                                onClick = {
-                                    viewModel.addTag(suggestion)
-                                    tagInputText = ""
-                                    focusManager.clearFocus()
-                                },
-                                label = { Text(suggestion) },
-                                colors = SuggestionChipDefaults.suggestionChipColors(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                    labelColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.testTag("autocomplete_$suggestion")
-                            )
-                        }
-                    }
-                }
-            }
+                        // Category Dropdown (50% width)
+                        var categoryExpanded by remember { mutableStateOf(false) }
+                        val categoryOptions = listOf("people" to "People", "anime" to "Anime", "all" to "All")
+                        val currentCategoryLabel = categoryOptions.find { it.first == uiState.discoverCategory }?.second ?: "People"
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Grid of saved search tags with 'x' button on each tag to remove from list
-            FlowRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("tags_flow_grid"),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                savedTags.forEach { tag ->
-                    val isSelected = activeTags.contains(tag)
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { viewModel.toggleTag(tag) },
-                        label = { Text(tag) },
-                        trailingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Remove tag",
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .clickable {
-                                        viewModel.removeTag(tag)
-                                    }
-                                    .testTag("remove_tag_${tag}")
-                            )
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                            selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        modifier = Modifier
-                            .height(36.dp)
-                            .testTag("tag_chip_$tag")
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // In NSFW mode: Segmented button for Both / Sketchy / NSFW
-            if (isNsfw) {
-                val purityOptions = listOf("both" to "Both", "sketchy" to "Sketchy", "nsfw" to "NSFW")
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .testTag("nsfw_purity_segmented_row")
-                ) {
-                    purityOptions.forEachIndexed { index, (key, label) ->
-                        SegmentedButton(
-                            selected = uiState.nsfwPurity == key,
-                            onClick = { viewModel.setNsfwPurity(key) },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = purityOptions.size)
+                        ExposedDropdownMenuBox(
+                            expanded = categoryExpanded,
+                            onExpandedChange = { categoryExpanded = it },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("nsfw_category_dropdown_box")
                         ) {
-                            Text(label)
+                            OutlinedTextField(
+                                value = currentCategoryLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Category") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                ),
+                                singleLine = true,
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .fillMaxWidth()
+                                    .testTag("nsfw_category_dropdown_field")
+                            )
+                            ExposedDropdownMenu(
+                                expanded = categoryExpanded,
+                                onDismissRequest = { categoryExpanded = false }
+                            ) {
+                                categoryOptions.forEach { (key, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label, fontWeight = if (uiState.discoverCategory == key) FontWeight.Bold else FontWeight.Normal) },
+                                        onClick = {
+                                            viewModel.setDiscoverCategory(key)
+                                            categoryExpanded = false
+                                        },
+                                        modifier = Modifier.testTag("category_option_$key")
+                                    )
+                                }
+                            }
+                        }
+
+                        // Purity Dropdown (50% width)
+                        var purityExpanded by remember { mutableStateOf(false) }
+                        val purityOptions = listOf("both" to "Both", "sketchy" to "Sketchy", "nsfw" to "NSFW")
+                        val currentPurityLabel = purityOptions.find { it.first == uiState.discoverPurity }?.second ?: "Both"
+
+                        ExposedDropdownMenuBox(
+                            expanded = purityExpanded,
+                            onExpandedChange = { purityExpanded = it },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("nsfw_purity_dropdown_box")
+                        ) {
+                            OutlinedTextField(
+                                value = currentPurityLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Purity") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = purityExpanded) },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                ),
+                                singleLine = true,
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .fillMaxWidth()
+                                    .testTag("nsfw_purity_dropdown_field")
+                            )
+                            ExposedDropdownMenu(
+                                expanded = purityExpanded,
+                                onDismissRequest = { purityExpanded = false }
+                            ) {
+                                purityOptions.forEach { (key, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label, fontWeight = if (uiState.discoverPurity == key) FontWeight.Bold else FontWeight.Normal) },
+                                        onClick = {
+                                            viewModel.setDiscoverPurity(key)
+                                            purityExpanded = false
+                                        },
+                                        modifier = Modifier.testTag("purity_option_$key")
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
             }
+        }
+    }
+}
 
-            // Category button group: all, anime, people (defaults to people for nsfw)
-            val categoryOptions = if (isNsfw) {
-                listOf("people" to "People", "anime" to "Anime", "all" to "All")
-            } else {
-                listOf("all" to "All", "anime" to "Anime", "people" to "People")
-            }
-            val currentCategory = if (isNsfw) uiState.nsfwCategory else uiState.sfwCategory
+@Composable
+fun DiscoverWallpaperCard(
+    wallpaper: Wallpaper,
+    onDragOffset: (Float) -> Unit,
+    onToggleFavorite: () -> Unit,
+    onCardClick: () -> Unit,
+    onAppear: () -> Unit
+) {
+    // Lazy face/object detection when the card appears in composition
+    LaunchedEffect(wallpaper.id) {
+        onAppear()
+    }
 
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .testTag("category_segmented_row")
-            ) {
-                categoryOptions.forEachIndexed { index, (key, label) ->
-                    SegmentedButton(
-                        selected = currentCategory == key,
-                        onClick = { viewModel.setCategory(key) },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = categoryOptions.size)
-                    ) {
-                        Text(label)
-                    }
-                }
-            }
+    var localOffset by remember(wallpaper.horizontalOffset) { mutableFloatStateOf(wallpaper.horizontalOffset) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(9f / 16f)
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable { onCardClick() }
+            .testTag("discover_card_${wallpaper.id}")
+    ) {
+        // Image with horizontal drag gesture: dragging updates offset without favoriting
+        PositionedWallpaperImage(
+            url = wallpaper.thumbUrl.ifBlank { wallpaper.fullUrl },
+            fallbackUrl = wallpaper.fullUrl,
+            horizontalOffset = localOffset,
+            onDrag = { newOffset ->
+                localOffset = newOffset
+                onDragOffset(newOffset)
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Hovering Bottom-Right: Favorite Heart Button (explicit action)
+        val isFav = wallpaper.isFavorite
+        IconButton(
+            onClick = onToggleFavorite,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(8.dp)
+                .size(40.dp)
+                .background(
+                    if (isFav) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
+                    CircleShape
+                )
+                .testTag("fav_button_${wallpaper.id}"),
+            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+        ) {
+            Icon(
+                imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (isFav) "Remove Favorite" else "Add Favorite",
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

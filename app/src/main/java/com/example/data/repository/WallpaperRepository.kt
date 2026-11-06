@@ -79,6 +79,29 @@ class WallpaperRepository(
         return detected
     }
 
+    fun isOffsetCached(id: String): Boolean {
+        if (id.isBlank()) return false
+        return memoryOffsetCache.containsKey(id) || positioningPrefs.contains(id)
+    }
+
+    suspend fun lazyDetectOffset(id: String, thumbUrlOrSource: String): Float = withContext(Dispatchers.IO) {
+        getCachedOffset(id)?.let { return@withContext it }
+        val fav = favoriteDao.getFavoriteById(id)
+        if (fav != null && fav.horizontalOffset in 0f..1f) {
+            setCachedOffset(id, fav.horizontalOffset)
+            return@withContext fav.horizontalOffset
+        }
+
+        val detected = detectFaceOffset(thumbUrlOrSource)
+        if (id.isNotBlank()) {
+            setCachedOffset(id, detected)
+            if (fav != null) {
+                favoriteDao.updateCropOffset(id, detected)
+            }
+        }
+        detected
+    }
+
     val isNsfwMode: Flow<Boolean> = preferences.isNsfwModeFlow
     val currentWallpaper: Flow<CurrentWallpaperInfo> = preferences.currentWallpaperFlow
     val sfwTags: Flow<Set<String>> = preferences.activeSfwTagsFlow
@@ -227,23 +250,6 @@ class WallpaperRepository(
                     Log.e("WallpaperRepo", "Error updating index.json on offset update", e)
                 }
             }
-        } else {
-            val current = preferences.currentWallpaperFlow.first()
-            if (current.id == id && current.id.isNotBlank()) {
-                val internalThumb = generateInternalThumbnail(id, sourceUri = null, sourceUrl = current.thumbUrl.ifBlank { current.url })
-                val fav = FavoriteWallpaper(
-                    id = current.id,
-                    url = current.url,
-                    thumbUrl = internalThumb.ifBlank { current.thumbUrl },
-                    purity = current.purity,
-                    category = current.category,
-                    horizontalOffset = clamped,
-                    addedTimestamp = System.currentTimeMillis(),
-                    tags = current.tags.joinToString(",")
-                )
-                favoriteDao.insertFavorite(fav)
-                saveWallpaperToLocalFolder(fav)
-            }
         }
     }
 
@@ -278,6 +284,133 @@ class WallpaperRepository(
             tags = favTags
         )
         notifyWallpaperChanged()
+    }
+
+    /**
+     * Applies the next wallpaper strictly from the saved Favorites.
+     * When scheduled, wallpapers only cycle through user favorites.
+     */
+    suspend fun applyNextScheduledFavoriteWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
+        try {
+            val isNsfw = preferences.isNsfwModeFlow.first()
+            val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
+            val favorites = favoriteDao.getFavoritesByPuritiesDirect(purities)
+            if (favorites.isEmpty()) {
+                return@withContext Result.failure(Exception("No favorites saved to cycle through"))
+            }
+
+            val current = preferences.currentWallpaperFlow.first()
+            val candidate = if (favorites.size > 1) {
+                favorites.filter { it.id != current.id }.randomOrNull() ?: favorites.random()
+            } else {
+                favorites.first()
+            }
+
+            applyFavorite(candidate)
+
+            val favTags = if (candidate.tags.isNotBlank()) {
+                candidate.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
+            } else {
+                emptyList()
+            }
+
+            val wp = Wallpaper(
+                id = candidate.id,
+                fullUrl = candidate.url,
+                thumbUrl = candidate.thumbUrl,
+                purity = candidate.purity,
+                category = candidate.category,
+                resolution = candidate.resolution,
+                horizontalOffset = candidate.horizontalOffset,
+                isFavorite = true,
+                tags = favTags
+            )
+            Result.success(wp)
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error applying next scheduled favorite", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Searches Wallhaven with pagination support for the Discover grid.
+     */
+    suspend fun searchWallpapersPaged(
+        query: String?,
+        category: String,
+        purity: String,
+        isNsfwMode: Boolean,
+        page: Int = 1
+    ): Result<com.example.data.model.WallhavenSearchResult> = withContext(Dispatchers.IO) {
+        val apiKey = preferences.apiKeyFlow.first().takeIf { it.isNotBlank() }
+
+        val categoriesCode = when (category.lowercase()) {
+            "anime" -> "010"
+            "people" -> "001"
+            else -> "111"
+        }
+
+        val purityCode = if (!isNsfwMode) {
+            "100"
+        } else {
+            if (apiKey != null) {
+                when (purity.lowercase()) {
+                    "sketchy" -> "010"
+                    "nsfw" -> "001"
+                    else -> "011"
+                }
+            } else {
+                "010"
+            }
+        }
+
+        val cleanQuery = query?.trim()?.takeIf { it.isNotBlank() }
+
+        try {
+            val response = kotlinx.coroutines.withTimeout(8000L) {
+                apiService.searchWallpapers(
+                    query = cleanQuery,
+                    categories = categoriesCode,
+                    purity = purityCode,
+                    sorting = "toplist",
+                    page = page,
+                    apiKey = apiKey
+                )
+            }
+
+            val meta = response.meta
+            val currentPage = meta?.currentPage ?: page
+            val lastPage = meta?.lastPage ?: page
+            val total = meta?.total ?: response.data.size
+
+            val favoriteIds = favoriteDao.getAllFavoriteIds().toSet()
+
+            val wallpapers = response.data.map { item ->
+                val fullUrl = item.path.ifBlank { item.url }
+                val thumb = item.thumbs?.large ?: item.thumbs?.original ?: item.thumbs?.small ?: fullUrl
+                val isFav = item.id in favoriteIds
+                val cachedOffset = getCachedOffset(item.id)
+                val favOffset = if (isFav) favoriteDao.getFavoriteById(item.id)?.horizontalOffset else null
+                val offset = cachedOffset ?: favOffset?.takeIf { it in 0f..1f } ?: 0.5f
+
+                Wallpaper(
+                    id = item.id,
+                    fullUrl = fullUrl,
+                    thumbUrl = thumb,
+                    purity = item.purity,
+                    category = item.category,
+                    resolution = item.resolution,
+                    horizontalOffset = offset,
+                    isFavorite = isFav,
+                    tags = item.tags?.map { it.name } ?: emptyList()
+                )
+            }
+
+            Result.success(com.example.data.model.WallhavenSearchResult(wallpapers, currentPage, lastPage, total))
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error searching wallpapers paged", e)
+            Result.failure(e)
+        }
     }
 
     /**

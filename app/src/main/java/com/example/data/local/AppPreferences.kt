@@ -60,6 +60,11 @@ class AppPreferences(private val context: Context) {
 
         val KEY_DELETED_WALLPAPER_IDS = stringSetPreferencesKey("deleted_wallpaper_ids")
         val KEY_IS_SCHEDULE_ENABLED = booleanPreferencesKey("is_schedule_enabled")
+        val KEY_IS_SLIDESHOW_PAUSED = booleanPreferencesKey("is_slideshow_paused")
+    }
+
+    val isSlideshowPausedFlow: Flow<Boolean> = context.dataStore.data.map {
+        it[KEY_IS_SLIDESHOW_PAUSED] ?: false
     }
 
     val isScheduleEnabledFlow: Flow<Boolean> = context.dataStore.data.map {
@@ -247,6 +252,12 @@ class AppPreferences(private val context: Context) {
     suspend fun setScheduleEnabled(enabled: Boolean) {
         context.dataStore.edit {
             it[KEY_IS_SCHEDULE_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setSlideshowPaused(paused: Boolean) {
+        context.dataStore.edit {
+            it[KEY_IS_SLIDESHOW_PAUSED] = paused
         }
     }
 

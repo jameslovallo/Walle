@@ -15,6 +15,9 @@ interface FavoriteDao {
     @Query("SELECT * FROM favorite_wallpapers WHERE LOWER(purity) IN (:purities) OR (purity = '' AND 'sfw' IN (:purities)) ORDER BY addedTimestamp DESC")
     fun getFavoritesByPurities(purities: List<String>): Flow<List<FavoriteWallpaper>>
 
+    @Query("SELECT * FROM favorite_wallpapers WHERE LOWER(purity) IN (:purities) OR (purity = '' AND 'sfw' IN (:purities)) ORDER BY addedTimestamp DESC")
+    suspend fun getFavoritesByPuritiesDirect(purities: List<String>): List<FavoriteWallpaper>
+
     @Query("SELECT * FROM favorite_wallpapers WHERE purity IN (:purities) ORDER BY RANDOM() LIMIT 1")
     suspend fun getRandomFavorite(purities: List<String>): FavoriteWallpaper?
 

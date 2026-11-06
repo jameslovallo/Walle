@@ -23,6 +23,7 @@ import coil.request.SuccessResult
 import com.example.WallEApplication
 import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.model.ModeFilterSettings
+import com.example.worker.WallpaperIntervalWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,27 +51,36 @@ class WallELiveWallpaperService : WallpaperService() {
         private var isNsfwMode: Boolean = false
         private var activeFilters: ModeFilterSettings = ModeFilterSettings()
 
-        // Double tap detection state
+        // Double tap & long press gesture detection state
         private var lastTapTime = 0L
         private var lastTapX = 0f
         private var lastTapY = 0f
         private val doubleTapThreshold = 350L
         private val doubleTapDistance = 120f
 
-        // Heart animation state
-        private var heartAnimStartTime = 0L
-        private var heartAnimX = 0f
-        private var heartAnimY = 0f
-        private var heartIsFavorited = true
-        private var isHeartAnimating = false
-        private val heartAnimDuration = 800L
+        private var touchDownX = 0f
+        private var touchDownY = 0f
+        private var isLongPressFired = false
+        private val longPressThreshold = 550L
+        private val longPressRunnable = Runnable {
+            isLongPressFired = true
+            handleLongPress(touchDownX, touchDownY)
+        }
+
+        // Action feedback animation state (Skip, Pause, Resume)
+        private var feedbackAnimStartTime = 0L
+        private var feedbackAnimX = 0f
+        private var feedbackAnimY = 0f
+        private var feedbackIconType = WallpaperRenderHelper.FeedbackIconType.SKIP
+        private var isFeedbackAnimating = false
+        private val feedbackAnimDuration = 800L
         private val animHandler = Handler(Looper.getMainLooper())
         private val animRunnable = object : Runnable {
             override fun run() {
-                if (!isHeartAnimating) return
-                val elapsed = SystemClock.uptimeMillis() - heartAnimStartTime
-                if (elapsed >= heartAnimDuration) {
-                    isHeartAnimating = false
+                if (!isFeedbackAnimating) return
+                val elapsed = SystemClock.uptimeMillis() - feedbackAnimStartTime
+                if (elapsed >= feedbackAnimDuration) {
+                    isFeedbackAnimating = false
                     drawFrame()
                 } else {
                     drawFrame()
@@ -101,8 +111,9 @@ class WallELiveWallpaperService : WallpaperService() {
 
         override fun onDestroy() {
             super.onDestroy()
-            isHeartAnimating = false
+            isFeedbackAnimating = false
             animHandler.removeCallbacks(animRunnable)
+            animHandler.removeCallbacks(longPressRunnable)
             try {
                 unregisterReceiver(updateReceiver)
             } catch (e: Exception) {
@@ -195,45 +206,94 @@ class WallELiveWallpaperService : WallpaperService() {
             super.onTouchEvent(event)
             if (event == null) return
 
-            if (event.action == MotionEvent.ACTION_UP) {
-                val now = SystemClock.uptimeMillis()
-                val dx = abs(event.x - lastTapX)
-                val dy = abs(event.y - lastTapY)
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    touchDownX = event.x
+                    touchDownY = event.y
+                    isLongPressFired = false
+                    animHandler.removeCallbacks(longPressRunnable)
+                    animHandler.postDelayed(longPressRunnable, longPressThreshold)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = abs(event.x - touchDownX)
+                    val dy = abs(event.y - touchDownY)
+                    if (dx > 45f || dy > 45f) {
+                        animHandler.removeCallbacks(longPressRunnable)
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    animHandler.removeCallbacks(longPressRunnable)
+                    if (!isLongPressFired) {
+                        val now = SystemClock.uptimeMillis()
+                        val dx = abs(event.x - lastTapX)
+                        val dy = abs(event.y - lastTapY)
 
-                if (now - lastTapTime <= doubleTapThreshold && dx <= doubleTapDistance && dy <= doubleTapDistance) {
-                    // Double tap triggered!
-                    handleDoubleTap(event.x, event.y)
-                    lastTapTime = 0L
-                } else {
-                    lastTapTime = now
-                    lastTapX = event.x
-                    lastTapY = event.y
+                        if (now - lastTapTime <= doubleTapThreshold && dx <= doubleTapDistance && dy <= doubleTapDistance) {
+                            // Double tap triggered: skip to next favorite wallpaper and reset timer
+                            handleDoubleTap(event.x, event.y)
+                            lastTapTime = 0L
+                        } else {
+                            lastTapTime = now
+                            lastTapX = event.x
+                            lastTapY = event.y
+                        }
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    animHandler.removeCallbacks(longPressRunnable)
                 }
             }
         }
 
         private fun handleDoubleTap(x: Float, y: Float) {
-            val info = currentInfo ?: return
-            if (info.id.isBlank()) return
-
             serviceScope.launch {
-                // Toggle favorite in repository
-                val isNowFavorite = repository.toggleFavorite(
-                    id = info.id,
-                    url = info.url,
-                    thumbUrl = info.thumbUrl,
-                    purity = info.purity,
-                    category = info.category,
-                    cropOffset = info.horizontalOffset
-                )
+                // Skip to the next wallpaper from saved favorites
+                repository.applyNextScheduledFavoriteWallpaper()
 
-                // Trigger heart feedback animation
+                // Reset the schedule timer
+                val isPaused = preferences.isSlideshowPausedFlow.first()
+                if (!isPaused) {
+                    val interval = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
+                    WallpaperIntervalWorker.scheduleNext(this@WallELiveWallpaperService, interval)
+                }
+
+                // Show skip icon where user tapped
                 withContext(Dispatchers.Main) {
-                    heartAnimX = x
-                    heartAnimY = y
-                    heartIsFavorited = isNowFavorite
-                    heartAnimStartTime = SystemClock.uptimeMillis()
-                    isHeartAnimating = true
+                    feedbackIconType = WallpaperRenderHelper.FeedbackIconType.SKIP
+                    feedbackAnimX = x
+                    feedbackAnimY = y
+                    feedbackAnimStartTime = SystemClock.uptimeMillis()
+                    isFeedbackAnimating = true
+                    animHandler.removeCallbacks(animRunnable)
+                    animHandler.post(animRunnable)
+                }
+            }
+        }
+
+        private fun handleLongPress(x: Float, y: Float) {
+            serviceScope.launch {
+                val wasPaused = preferences.isSlideshowPausedFlow.first()
+                val nowPaused = !wasPaused
+                preferences.setSlideshowPaused(nowPaused)
+
+                if (nowPaused) {
+                    WallpaperIntervalWorker.cancel(this@WallELiveWallpaperService)
+                } else {
+                    val interval = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
+                    WallpaperIntervalWorker.scheduleNext(this@WallELiveWallpaperService, interval)
+                }
+
+                // Show Pause or Resume feedback icon
+                withContext(Dispatchers.Main) {
+                    feedbackIconType = if (nowPaused) {
+                        WallpaperRenderHelper.FeedbackIconType.PAUSE
+                    } else {
+                        WallpaperRenderHelper.FeedbackIconType.RESUME
+                    }
+                    feedbackAnimX = x
+                    feedbackAnimY = y
+                    feedbackAnimStartTime = SystemClock.uptimeMillis()
+                    isFeedbackAnimating = true
                     animHandler.removeCallbacks(animRunnable)
                     animHandler.post(animRunnable)
                 }
@@ -266,15 +326,15 @@ class WallELiveWallpaperService : WallpaperService() {
                         canvas.drawColor(Color.parseColor("#121316"))
                     }
 
-                    // Render heart feedback animation if active
-                    if (isHeartAnimating) {
-                        val elapsed = SystemClock.uptimeMillis() - heartAnimStartTime
-                        val progress = (elapsed.toFloat() / heartAnimDuration.toFloat()).coerceIn(0f, 1f)
-                        WallpaperRenderHelper.drawHeartFeedback(
+                    // Render action feedback animation (Skip, Pause, Resume) if active
+                    if (isFeedbackAnimating) {
+                        val elapsed = SystemClock.uptimeMillis() - feedbackAnimStartTime
+                        val progress = (elapsed.toFloat() / feedbackAnimDuration.toFloat()).coerceIn(0f, 1f)
+                        WallpaperRenderHelper.drawFeedbackIcon(
                             canvas = canvas,
-                            x = heartAnimX,
-                            y = heartAnimY,
-                            isFavorited = heartIsFavorited,
+                            x = feedbackAnimX,
+                            y = feedbackAnimY,
+                            type = feedbackIconType,
                             progress = progress
                         )
                     }

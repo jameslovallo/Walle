@@ -5,7 +5,17 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class WallhavenSearchResponse(
-    @Json(name = "data") val data: List<WallhavenImageItem> = emptyList()
+    @Json(name = "data") val data: List<WallhavenImageItem> = emptyList(),
+    @Json(name = "meta") val meta: WallhavenMeta? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class WallhavenMeta(
+    @Json(name = "current_page") val currentPage: Int = 1,
+    @Json(name = "last_page") val lastPage: Int = 1,
+    @Json(name = "per_page") val perPage: Int = 24,
+    @Json(name = "total") val total: Int = 0,
+    @Json(name = "query") val query: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -67,4 +77,11 @@ data class ModeFilterSettings(
     val blur: Float = 0f,         // 0f (no blur) to 1f (max blur)
     val brightness: Float = 1.0f, // 0f (black) to 1f (full opacity over black)
     val vignette: Float = 0f      // 0f (no vignette) to 1f (full vignette)
+)
+
+data class WallhavenSearchResult(
+    val wallpapers: List<Wallpaper>,
+    val currentPage: Int,
+    val lastPage: Int,
+    val total: Int
 )
