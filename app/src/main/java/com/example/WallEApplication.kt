@@ -40,8 +40,7 @@ class WallEApplication : Application(), ImageLoaderFactory {
             val current = preferences.currentWallpaperFlow.first()
             if (current.url.isBlank()) {
                 val isNsfw = preferences.isNsfwModeFlow.first()
-                val targetTag = if (isNsfw) "model" else "nature"
-                repository.fetchAndApplyInitialWallpaper(isNsfw, targetTag)
+                repository.fetchAndApplyInitialWallpaper(isNsfw)
             }
         }
     }

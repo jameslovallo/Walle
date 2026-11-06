@@ -7,11 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -92,6 +90,11 @@ fun DiscoverScreen(
         if (shouldLoadMore && !uiState.isDiscoverLoading && !uiState.isDiscoverLoadingMore && !uiState.discoverHasReachedEnd) {
             viewModel.loadNextPage()
         }
+    }
+
+    // Reset the grid to the top whenever a new search is run.
+    LaunchedEffect(uiState.searchGeneration) {
+        gridState.scrollToItem(0, 0)
     }
 
     Column(
@@ -273,9 +276,9 @@ fun DiscoverScreen(
                         .testTag("discover_search_input")
                 )
 
-                // Filter Controls (SFW vs NSFW)
+                // Filter Controls (SFW vs NSFW) — both default to the most inclusive option.
                 if (!isNsfw) {
-                    // SFW Mode: "All / Anime / People" selector
+                    // SFW Mode: "All / Anime / People" selector, default All (111).
                     val categoryOptions = listOf("all" to "All", "anime" to "Anime", "people" to "People")
                     SingleChoiceSegmentedButtonRow(
                         modifier = Modifier
@@ -295,8 +298,8 @@ fun DiscoverScreen(
                         }
                     }
                 } else {
-                    // NSFW Mode: Two side-by-side dropdowns taking 50% width each
-                    // Category dropdown ("People" default) & Purity dropdown ("Both" default)
+                    // NSFW Mode: Two side-by-side dropdowns taking 50% width each.
+                    // Category default People (001) and Purity default All (111).
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -305,7 +308,7 @@ fun DiscoverScreen(
                     ) {
                         // Category Dropdown (50% width)
                         var categoryExpanded by remember { mutableStateOf(false) }
-                        val categoryOptions = listOf("people" to "People", "anime" to "Anime", "all" to "All")
+                        val categoryOptions = listOf("people" to "People", "anime" to "Anime", "all" to "All" )
                         val currentCategoryLabel = categoryOptions.find { it.first == uiState.discoverCategory }?.second ?: "People"
 
                         ExposedDropdownMenuBox(
@@ -351,8 +354,8 @@ fun DiscoverScreen(
 
                         // Purity Dropdown (50% width)
                         var purityExpanded by remember { mutableStateOf(false) }
-                        val purityOptions = listOf("both" to "Both", "sketchy" to "Sketchy", "nsfw" to "NSFW")
-                        val currentPurityLabel = purityOptions.find { it.first == uiState.discoverPurity }?.second ?: "Both"
+                        val purityOptions = listOf("nsfw" to "NSFW", "sketchy" to "Sketchy", "both" to "Both")
+                        val currentPurityLabel = purityOptions.find { it.first == uiState.discoverPurity }?.second ?: "NSFW"
 
                         ExposedDropdownMenuBox(
                             expanded = purityExpanded,

@@ -35,18 +35,6 @@ class AppPreferences(private val context: Context) {
         val KEY_NSFW_BRIGHTNESS = floatPreferencesKey("nsfw_brightness")
         val KEY_NSFW_VIGNETTE = floatPreferencesKey("nsfw_vignette")
 
-        // Tags
-        val KEY_SAVED_SFW_TAGS = stringSetPreferencesKey("saved_sfw_tags")
-        val KEY_ACTIVE_SFW_TAGS = stringSetPreferencesKey("active_sfw_tags")
-        val KEY_SAVED_NSFW_TAGS = stringSetPreferencesKey("saved_nsfw_tags")
-        val KEY_ACTIVE_NSFW_TAGS = stringSetPreferencesKey("active_nsfw_tags")
-
-        // NSFW Purity: "both", "sketchy", "nsfw"
-        val KEY_NSFW_PURITY = stringPreferencesKey("nsfw_purity")
-        // Categories: "all", "anime", "people"
-        val KEY_SFW_CATEGORY = stringPreferencesKey("sfw_category")
-        val KEY_NSFW_CATEGORY = stringPreferencesKey("nsfw_category")
-
         val KEY_LOCAL_FOLDER_URI = stringPreferencesKey("local_folder_uri")
 
         // Current Wallpaper state
@@ -105,37 +93,6 @@ class AppPreferences(private val context: Context) {
         )
     }
 
-    val savedSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_SAVED_SFW_TAGS] ?: setOf("nature")
-    }
-
-    val activeSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_ACTIVE_SFW_TAGS] ?: setOf("nature")
-    }
-
-    val savedNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_SAVED_NSFW_TAGS] ?: setOf("model")
-    }
-
-    val activeNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_ACTIVE_NSFW_TAGS] ?: setOf("model")
-    }
-
-    val sfwTagsFlow: Flow<Set<String>> get() = activeSfwTagsFlow
-    val nsfwTagsFlow: Flow<Set<String>> get() = activeNsfwTagsFlow
-
-    val nsfwPurityFlow: Flow<String> = context.dataStore.data.map {
-        it[KEY_NSFW_PURITY] ?: "both" // "both", "sketchy", "nsfw"
-    }
-
-    val sfwCategoryFlow: Flow<String> = context.dataStore.data.map {
-        it[KEY_SFW_CATEGORY] ?: "all"
-    }
-
-    val nsfwCategoryFlow: Flow<String> = context.dataStore.data.map {
-        it[KEY_NSFW_CATEGORY] ?: "people" // Defaults to people for nsfw
-    }
-
     val localFolderUriFlow: Flow<String> = context.dataStore.data.map {
         it[KEY_LOCAL_FOLDER_URI] ?: ""
     }
@@ -186,37 +143,6 @@ class AppPreferences(private val context: Context) {
             it[KEY_NSFW_BRIGHTNESS] = brightness
             it[KEY_NSFW_VIGNETTE] = vignette
         }
-    }
-
-    suspend fun setSavedSfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_SAVED_SFW_TAGS] = tags }
-    }
-
-    suspend fun setActiveSfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_ACTIVE_SFW_TAGS] = tags }
-    }
-
-    suspend fun setSavedNsfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_SAVED_NSFW_TAGS] = tags }
-    }
-
-    suspend fun setActiveNsfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_ACTIVE_NSFW_TAGS] = tags }
-    }
-
-    suspend fun setSfwTags(tags: Set<String>) = setActiveSfwTags(tags)
-    suspend fun setNsfwTags(tags: Set<String>) = setActiveNsfwTags(tags)
-
-    suspend fun setNsfwPurity(purity: String) {
-        context.dataStore.edit { it[KEY_NSFW_PURITY] = purity }
-    }
-
-    suspend fun setSfwCategory(cat: String) {
-        context.dataStore.edit { it[KEY_SFW_CATEGORY] = cat }
-    }
-
-    suspend fun setNsfwCategory(cat: String) {
-        context.dataStore.edit { it[KEY_NSFW_CATEGORY] = cat }
     }
 
     suspend fun setLocalFolderUri(uri: String) {

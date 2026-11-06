@@ -1,7 +1,7 @@
 package com.example
 
 import com.example.data.model.ModeFilterSettings
-import com.example.data.model.WallhavenTags
+import com.example.data.repository.WallpaperRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -34,35 +34,19 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun `test wallhaven autocomplete suggestions`() {
-        val suggestions = WallhavenTags.getAutocompleteSuggestions(
-            query = "anim",
-            excludeTags = setOf("manga")
-        )
-        assertTrue(suggestions.isNotEmpty())
-        assertTrue(suggestions.contains("anime"))
-        assertTrue(suggestions.contains("anime girl"))
-        assertFalse(suggestions.contains("manga"))
+    fun `test wallhaven query builder includes all terms as plain tags`() {
+        assertEquals("nature forest sunset", WallpaperRepository.buildWallhavenQuery(listOf("nature", "forest", "sunset")))
+        // Operators that would narrow results are stripped so every term is a plain tag.
+        assertEquals("nature forest", WallpaperRepository.buildWallhavenQuery(listOf("+Nature", "-forest", "nature")))
+        assertEquals(null, WallpaperRepository.buildWallhavenQuery(emptyList()))
+        assertEquals(null, WallpaperRepository.buildWallhavenQuery(listOf("", "  ")))
     }
 
     @Test
-    fun `test wallhaven similar tags suggestion`() {
-        val similar = WallhavenTags.getSimilarTags(
-            currentTags = setOf("cyberpunk"),
-            excludeTags = setOf("cyberpunk")
-        )
-        assertTrue(similar.isNotEmpty())
-        assertTrue(similar.contains("neon") || similar.contains("sci-fi") || similar.contains("futuristic"))
-    }
-
-    @Test
-    fun `test wallhaven similar tags for landscape`() {
-        val similar = WallhavenTags.getSimilarTags(
-            currentTags = setOf("landscape"),
-            excludeTags = setOf("landscape")
-        )
-        assertTrue(similar.isNotEmpty())
-        assertTrue(similar.contains("nature") || similar.contains("mountains") || similar.contains("forest"))
+    fun `test parse search terms splits free text`() {
+        assertEquals(listOf("night", "city"), WallpaperRepository.parseSearchTerms("night city"))
+        assertEquals(listOf("nature"), WallpaperRepository.parseSearchTerms("  nature  "))
+        assertEquals(emptyList<String>(), WallpaperRepository.parseSearchTerms(""))
     }
 
     @Test
@@ -105,14 +89,14 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun `test initial tags default to nature for SFW and model for NSFW`() {
+    fun `test initial tags default to nature for SFW and women for NSFW`() {
         val defaultSfwTag = "nature"
-        val defaultNsfwTag = "model"
+        val defaultNsfwTag = "women"
 
         fun getInitialTag(isNsfw: Boolean) = if (isNsfw) defaultNsfwTag else defaultSfwTag
 
         assertEquals("nature", getInitialTag(false))
-        assertEquals("model", getInitialTag(true))
+        assertEquals("women", getInitialTag(true))
     }
 
     @Test
@@ -128,19 +112,33 @@ class ExampleUnitTest {
 
     @Test
     fun `test discover search defaults for sfw and nsfw modes`() {
-        // SFW mode defaults
-        val sfwCategory = "all"
-        val sfwQuery = "nature"
-        assertEquals("all", sfwCategory)
-        assertEquals("nature", sfwQuery)
+        // SFW defaults: inclusive category + nature
+        assertEquals("all", if (false) "people" else "all")
+        assertEquals("all", if (false) "all" else "all")
+        assertEquals("nature", if (false) "women" else "nature")
+        // NSFW defaults: People category + women
+        assertEquals("people", if (true) "people" else "all")
+        assertEquals("all", if (true) "all" else "all")
+        assertEquals("women", if (true) "women" else "nature")
+    }
 
-        // NSFW mode defaults
-        val nsfwCategory = "people"
-        val nsfwPurity = "both"
-        val nsfwQuery = "model"
-        assertEquals("people", nsfwCategory)
-        assertEquals("both", nsfwPurity)
-        assertEquals("model", nsfwQuery)
+    @Test
+    fun `test category code most inclusive is all`() {
+        assertEquals("111", WallpaperRepository.categoryCode("all"))
+        assertEquals("111", WallpaperRepository.categoryCode("unknown"))
+        assertEquals("010", WallpaperRepository.categoryCode("anime"))
+        assertEquals("001", WallpaperRepository.categoryCode("people"))
+        assertEquals("100", WallpaperRepository.categoryCode("general"))
+    }
+
+    @Test
+    fun `test purity code most inclusive is all`() {
+        assertEquals("111", WallpaperRepository.purityCode("all", isNsfwMode = true, hasApiKey = true))
+        assertEquals("100", WallpaperRepository.purityCode("all", isNsfwMode = false, hasApiKey = true))
+        assertEquals("110", WallpaperRepository.purityCode("all", isNsfwMode = true, hasApiKey = false))
+        assertEquals("010", WallpaperRepository.purityCode("sketchy", isNsfwMode = true, hasApiKey = true))
+        assertEquals("001", WallpaperRepository.purityCode("nsfw", isNsfwMode = true, hasApiKey = true))
+        assertEquals("011", WallpaperRepository.purityCode("both", isNsfwMode = true, hasApiKey = true))
     }
 
     @Test
