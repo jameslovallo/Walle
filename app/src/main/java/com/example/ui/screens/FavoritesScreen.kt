@@ -17,8 +17,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -34,8 +32,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.data.local.FavoriteWallpaper
 import com.example.ui.WallEViewModel
 import com.example.ui.components.PositionedWallpaperImage
@@ -91,19 +91,22 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        // Image with horizontal drag gesture: dragging updates the saved position
+        // Image with horizontal drag gesture: live preview during drag (smooth, no DB writes),
+        // debounced persist only on drag end.
         PositionedWallpaperImage(
             url = favorite.thumbUrl.ifBlank { favorite.url },
             fallbackUrl = favorite.url,
             horizontalOffset = localOffset,
             onDrag = { newOffset ->
                 localOffset = newOffset
-                onDragOffset(newOffset)
+            },
+            onDragEnd = {
+                onDragOffset(localOffset)
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        // Hovering Bottom-Right: Delete button
+        // Hovering Bottom-Right: Remove favorite (broken heart)
         IconButton(
             onClick = onDeleteClick,
             modifier = Modifier
@@ -115,7 +118,7 @@ fun FavoriteCard(
             colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
         ) {
             Icon(
-                imageVector = Icons.Default.Delete,
+                painter = painterResource(id = R.drawable.ic_favorite_broken),
                 contentDescription = "Delete",
                 modifier = Modifier.size(20.dp)
             )

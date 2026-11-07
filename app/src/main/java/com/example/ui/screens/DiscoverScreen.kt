@@ -425,14 +425,19 @@ fun DiscoverWallpaperCard(
             .clickable { onCardClick() }
             .testTag("discover_card_${wallpaper.id}")
     ) {
-        // Image with horizontal drag gesture: dragging updates offset without favoriting
+        // Image with horizontal drag gesture: live preview during drag (smooth, no saves),
+        // debounced persist only on drag end. Non-favorites are preview-only: never saved.
         PositionedWallpaperImage(
             url = wallpaper.thumbUrl.ifBlank { wallpaper.fullUrl },
             fallbackUrl = wallpaper.fullUrl,
             horizontalOffset = localOffset,
             onDrag = { newOffset ->
                 localOffset = newOffset
-                onDragOffset(newOffset)
+            },
+            onDragEnd = {
+                if (wallpaper.isFavorite) {
+                    onDragOffset(localOffset)
+                }
             },
             modifier = Modifier.fillMaxSize()
         )
