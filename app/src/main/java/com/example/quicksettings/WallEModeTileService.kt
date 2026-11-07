@@ -40,8 +40,12 @@ class WallEModeTileService : TileService() {
             preferences.setNsfwMode(newMode)
             updateTileDisplay(newMode)
 
-            // Automatically fetch and apply wallpaper for the newly activated mode
-            repository.fetchAndApplyNextWallpaper()
+            // Apply a saved favorite for the new mode immediately.
+            // Fall back to a fresh fetch only if no favorites exist for that mode.
+            val favoriteResult = repository.applyNextScheduledFavoriteWallpaper()
+            if (favoriteResult.isFailure) {
+                repository.fetchAndApplyNextWallpaper()
+            }
         }
     }
 
