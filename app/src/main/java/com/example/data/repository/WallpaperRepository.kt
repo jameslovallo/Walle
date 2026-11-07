@@ -75,6 +75,21 @@ class WallpaperRepository(
                 .distinct()
             return if (cleaned.isEmpty()) null else cleaned.joinToString(" ")
         }
+
+        fun extractWallhavenId(raw: String): String {
+            var id = raw.trim()
+            if (id.startsWith("like:", ignoreCase = true)) {
+                id = id.substringAfter("like:").trim()
+            }
+            if (id.contains("/")) {
+                val segment = id.substringAfterLast("/")
+                id = segment.removePrefix("wallhaven-").substringBefore(".")
+            }
+            if (id.startsWith("wallhaven-", ignoreCase = true)) {
+                id = id.substringAfter("wallhaven-").trim()
+            }
+            return id.substringBefore(".")
+        }
     }
 
     fun getCachedOffset(id: String): Float? {
@@ -415,7 +430,40 @@ class WallpaperRepository(
             }
         }
 
-        val wallhavenQuery = buildWallhavenQuery(query)
+        val isLikeQuery = query?.trim()?.startsWith("like:", ignoreCase = true) == true
+        val wallhavenQuery = if (isLikeQuery) {
+            val cleanId = extractWallhavenId(query!!)
+            val localFav = favoriteDao.getFavoriteById(cleanId)
+            val localFavTags = localFav?.tags?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
+            val currentWp = preferences.currentWallpaperFlow.first()
+            val currentWpTags = if (currentWp.id == cleanId || extractWallhavenId(currentWp.url) == cleanId) currentWp.tags else emptyList()
+
+            val knownTags = when {
+                localFavTags.isNotEmpty() -> localFavTags
+                currentWpTags.isNotEmpty() -> currentWpTags
+                else -> {
+                    try {
+                        val details = apiService.getWallpaperDetails(cleanId, apiKey)
+                        details.data?.tags?.map { it.name } ?: emptyList()
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
+                }
+            }
+
+            if (knownTags.isNotEmpty()) {
+                val filteredTags = knownTags.filter { tag ->
+                    val lower = tag.lowercase()
+                    !lower.contains("watermark") && !lower.contains("wallpaper") && !lower.contains("simple background")
+                }
+                val tagsToUse = if (filteredTags.isNotEmpty()) filteredTags else knownTags
+                tagsToUse.take(3).joinToString(" ")
+            } else {
+                null
+            }
+        } else {
+            buildWallhavenQuery(query)
+        }
 
         try {
             // Single timeout layer (OkHttp callTimeout only). A second

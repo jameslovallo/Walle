@@ -1,25 +1,13 @@
 package com.example.data.api
 
+import com.example.data.model.WallhavenDetailResponse
 import com.example.data.model.WallhavenSearchResponse
 import retrofit2.http.GET
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
- * Replacement Wallhaven image API.
- *
- * Single unified search call. The caller (WallpaperRepository) builds
- * the `q` parameter so that all terms are included as plain tags joined
- * with a single space and no `+` (must-have) or `-` (exclude) operators.
- * That keeps the result set maximally inclusive for the requested terms.
- *
- * `sorting = "relevance"` (with `order = "desc"`) is used instead of
- * `toplist` / `random` so the API returns every relevant wallpaper in
- * relevance order rather than only the recent top wallpapers.
- *
- * No restrictive `atleast` / `resolutions` / `ratios` / `colors` params
- * are sent, since those would filter out otherwise relevant results.
- * Category and purity codes are still supplied by the caller exactly
- * as before — the UI and filtering logic are unchanged.
+ * Wallhaven image and details API.
  */
 interface WallhavenApiService {
     @GET("api/v1/search")
@@ -32,4 +20,10 @@ interface WallhavenApiService {
         @Query("page") page: Int = 1,
         @Query("apikey") apiKey: String? = null
     ): WallhavenSearchResponse
+
+    @GET("api/v1/w/{id}")
+    suspend fun getWallpaperDetails(
+        @Path("id") id: String,
+        @Query("apikey") apiKey: String? = null
+    ): WallhavenDetailResponse
 }

@@ -193,4 +193,13 @@ class ExampleUnitTest {
         assertEquals(5, step5Percent)
         assertEquals(10, step10Percent)
     }
+
+    @Test
+    fun `test extractWallhavenId extracts clean id from various formats`() {
+        assertEquals("94x38z", com.example.data.repository.WallpaperRepository.extractWallhavenId("like:94x38z"))
+        assertEquals("94x38z", com.example.data.repository.WallpaperRepository.extractWallhavenId("wallhaven-94x38z.jpg"))
+        assertEquals("94x38z", com.example.data.repository.WallpaperRepository.extractWallhavenId("https://w.wallhaven.cc/full/94/wallhaven-94x38z.jpg"))
+        assertEquals("94x38z", com.example.data.repository.WallpaperRepository.extractWallhavenId("https://wallhaven.cc/w/94x38z"))
+        assertEquals("3qgq66", com.example.data.repository.WallpaperRepository.extractWallhavenId("3qgq66"))
+    }
 }

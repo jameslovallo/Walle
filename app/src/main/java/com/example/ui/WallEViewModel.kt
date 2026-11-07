@@ -331,7 +331,8 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun searchSimilar(wallpaperId: String) {
         if (wallpaperId.isBlank()) return
-        val targetQuery = "like:$wallpaperId"
+        val cleanId = com.example.data.repository.WallpaperRepository.extractWallhavenId(wallpaperId)
+        val targetQuery = if (cleanId.isNotBlank()) "like:$cleanId" else "nature"
         _uiState.value = _uiState.value.copy(discoverQuery = targetQuery)
         performSearch(targetQuery)
     }

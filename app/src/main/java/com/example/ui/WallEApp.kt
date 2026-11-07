@@ -294,6 +294,10 @@ fun CurrentFavoriteModalContent(
         }
 
         // Preview card frame
+        val identifier = currentWallpaper.id.ifBlank {
+            currentWallpaper.url.ifBlank { currentWallpaper.thumbUrl }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.72f)
@@ -309,8 +313,8 @@ fun CurrentFavoriteModalContent(
                     fallbackUrl = currentWallpaper.thumbUrl,
                     horizontalOffset = localOffset,
                     onTap = {
-                        if (currentWallpaper.id.isNotBlank()) {
-                            onFindSimilar(currentWallpaper.id)
+                        if (identifier.isNotBlank()) {
+                            onFindSimilar(identifier)
                         }
                     },
                     onDrag = { newOffset ->
@@ -331,8 +335,8 @@ fun CurrentFavoriteModalContent(
                     .align(Alignment.TopCenter)
                     .padding(top = 10.dp)
                     .clickable {
-                        if (currentWallpaper.id.isNotBlank()) {
-                            onFindSimilar(currentWallpaper.id)
+                        if (identifier.isNotBlank()) {
+                            onFindSimilar(identifier)
                         }
                     }
             ) {
@@ -381,8 +385,8 @@ fun CurrentFavoriteModalContent(
         // Action button to find similar
         Button(
             onClick = {
-                if (currentWallpaper.id.isNotBlank()) {
-                    onFindSimilar(currentWallpaper.id)
+                if (identifier.isNotBlank()) {
+                    onFindSimilar(identifier)
                 }
             },
             shape = RoundedCornerShape(14.dp),
