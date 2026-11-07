@@ -10,6 +10,7 @@ import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.ModeFilterSettings
 import com.example.data.model.Wallpaper
 import com.example.worker.WallpaperIntervalWorker
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -49,7 +50,8 @@ data class WallEUIState(
     val intervalMinutes: Int = 60,
     val localFolderUri: String = "",
     val isScheduleEnabled: Boolean = true,
-    val isSlideshowPaused: Boolean = false
+    val isSlideshowPaused: Boolean = false,
+    val isFavoritesLoading: Boolean = false
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -66,6 +68,23 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(WallEUIState())
     val uiState: StateFlow<WallEUIState> = _uiState.asStateFlow()
+
+    private var folderLoadJob: Job? = null
+
+    fun loadFavoritesFromFolder(uri: String) {
+        if (uri.isBlank()) return
+        folderLoadJob?.cancel()
+        _uiState.value = _uiState.value.copy(isFavoritesLoading = true)
+        folderLoadJob = viewModelScope.launch {
+            try {
+                repository.syncAndLoadFromSelectedFolder(uri)
+            } finally {
+                if (folderLoadJob == kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]) {
+                    _uiState.value = _uiState.value.copy(isFavoritesLoading = false)
+                }
+            }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -126,7 +145,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             repository.localFolderUri.collect { uri ->
                 _uiState.value = _uiState.value.copy(localFolderUri = uri)
                 if (uri.isNotBlank()) {
-                    repository.syncAndLoadFromSelectedFolder(uri)
+                    loadFavoritesFromFolder(uri)
                 }
             }
         }
@@ -479,7 +498,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             preferences.setLocalFolderUri(uri)
             if (uri.isNotBlank()) {
-                repository.syncAndLoadFromSelectedFolder(uri)
+                loadFavoritesFromFolder(uri)
             }
         }
     }

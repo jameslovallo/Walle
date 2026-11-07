@@ -201,8 +201,10 @@ class WallpaperRepository(
     suspend fun deleteFavorite(id: String) = withContext(Dispatchers.IO) {
         if (id.isBlank()) return@withContext
 
-        // 1. Remove from Room DB
+        // 1. Remove from Room DB (this drives the Favorites grid Flow view update)
         favoriteDao.deleteById(id)
+        memoryOffsetCache.remove(id)
+        positioningPrefs.edit().remove(id).apply()
 
         // 3. Remove internal thumbnail
         try {
@@ -898,11 +900,32 @@ class WallpaperRepository(
                 }
             }
 
-            // 3. Process each item:
-            // Combine items from index.json and scanned files
-            val allIds = (indexedItemsMap.keys + discoveredFiles.keys).distinct()
+            // 3. Prune index items without a corresponding image file.
+            // A favorite removed in-app (or deleted via Files) must not be
+            // resurrected from index.json alone — that left a card with no
+            // image. Delete the DB row, internal thumbnail and cached offset
+            // so both the view (Room Flow) and the index stay consistent.
+            val orphanIndexIds = indexedItemsMap.keys - discoveredFiles.keys
+            for (id in orphanIndexIds) {
+                try {
+                    favoriteDao.deleteById(id)
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error removing orphan $id from DB", e)
+                }
+                try {
+                    val thumbFile = getInternalThumbnailFile(id)
+                    if (thumbFile.exists()) {
+                        thumbFile.delete()
+                    }
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error deleting orphan thumbnail for $id", e)
+                }
+                memoryOffsetCache.remove(id)
+                positioningPrefs.edit().remove(id).apply()
+            }
 
-            for (id in allIds) {
+            // 4. Process each scanned file (with its index metadata when present)
+            for (id in discoveredFiles.keys) {
                 val indexJson = indexedItemsMap[id]
                 val localFileInfo = discoveredFiles[id]
 
@@ -949,7 +972,7 @@ class WallpaperRepository(
                 favoriteDao.insertFavorite(fav)
             }
 
-            // 4. Update/refresh index.json in the user folder so it reflects all favorites
+            // 5. Update/refresh index.json in the user folder so it reflects all favorites
             updateFolderMetadataIndex(rootDoc)
             notifyWallpaperChanged()
         } catch (e: Exception) {

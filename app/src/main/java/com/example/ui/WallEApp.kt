@@ -160,7 +160,8 @@ fun WallEApp(
                         uiState = uiState
                     )
                     1 -> FavoritesScreen(
-                        viewModel = viewModel
+                        viewModel = viewModel,
+                        uiState = uiState
                     )
                     2 -> SettingsScreen(
                         viewModel = viewModel,

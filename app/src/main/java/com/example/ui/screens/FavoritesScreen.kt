@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,14 +14,17 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,37 +41,81 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.local.FavoriteWallpaper
+import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
 import com.example.ui.components.PositionedWallpaperImage
 
 @Composable
 fun FavoritesScreen(
     viewModel: WallEViewModel,
+    uiState: WallEUIState,
     modifier: Modifier = Modifier
 ) {
     val favorites by viewModel.favorites.collectAsState()
 
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 160.dp),
-        contentPadding = PaddingValues(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .testTag("favorites_grid")
+            .testTag("favorites_screen_container"),
+        contentAlignment = Alignment.Center
     ) {
-        items(
-            items = favorites,
-            key = { it.id }
-        ) { fav ->
-            FavoriteCard(
-                favorite = fav,
-                onDeleteClick = { viewModel.deleteFavorite(fav.id) },
-                onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
-                onDragOffset = { newOffset ->
-                    viewModel.updateFavoriteOffset(fav.id, newOffset)
+        if (uiState.isFavoritesLoading && favorites.isEmpty()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.testTag("favorites_loading_spinner")
+            ) {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(44.dp)
+                )
+                Text(
+                    text = "Loading favorites...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 160.dp),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("favorites_grid")
+            ) {
+                items(
+                    items = favorites,
+                    key = { it.id }
+                ) { fav ->
+                    FavoriteCard(
+                        favorite = fav,
+                        onDeleteClick = { viewModel.deleteFavorite(fav.id) },
+                        onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
+                        onDragOffset = { newOffset ->
+                            viewModel.updateFavoriteOffset(fav.id, newOffset)
+                        }
+                    )
                 }
-            )
+
+                if (uiState.isFavoritesLoading) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 3.dp
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
