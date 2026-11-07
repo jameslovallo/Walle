@@ -398,7 +398,7 @@ class WallpaperRepository(
         val wallhavenQuery = buildWallhavenQuery(query)
 
         try {
-            val response = kotlinx.coroutines.withTimeout(8000L) {
+            val response = kotlinx.coroutines.withTimeout(20000L) {
                 apiService.searchWallpapers(
                     query = wallhavenQuery,
                     categories = categoriesCode,
@@ -614,7 +614,7 @@ class WallpaperRepository(
         val wallhavenQuery = buildWallhavenQuery(targetTags)
 
         val response = try {
-            kotlinx.coroutines.withTimeout(8000L) {
+            kotlinx.coroutines.withTimeout(20000L) {
                 apiService.searchWallpapers(
                     query = wallhavenQuery,
                     categories = categoriesCode,

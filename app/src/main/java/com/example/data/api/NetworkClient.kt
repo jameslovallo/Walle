@@ -16,9 +16,13 @@ object NetworkClient {
         .build()
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .writeTimeout(8, TimeUnit.SECONDS)
+        // WiFi DNS / AP roaming is often slower/more lossy than mobile data.
+        // The previous 6s/8s timeouts could expire mid-handshake on congested
+        // or IPv6-broken WiFi before OkHttp's Happy Eyeballs fell back to IPv4.
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(45, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
