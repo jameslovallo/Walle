@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -32,7 +33,9 @@ import coil.request.ImageRequest
  * Robust wallpaper image component that fills the aspect-ratio frame,
  * scales the uncropped image with ContentScale.Crop, and aligns it horizontally
  * according to horizontalOffset (0f = left, 0.5f = center, 1f = right).
- * Supports horizontal dragging to adjust the offset in real time.
+ * Supports horizontal dragging to adjust the offset smoothly in real time,
+ * saving positioning data only when the user finishes dragging.
+ * Supports optional onTap callback for tapping actions.
  */
 @Composable
 fun PositionedWallpaperImage(
@@ -40,8 +43,9 @@ fun PositionedWallpaperImage(
     horizontalOffset: Float,
     modifier: Modifier = Modifier,
     fallbackUrl: String? = null,
+    onTap: (() -> Unit)? = null,
     onDrag: ((Float) -> Unit)? = null,
-    onDragEnd: (() -> Unit)? = null,
+    onDragEnd: ((Float) -> Unit)? = null,
     onLoadComplete: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -56,27 +60,33 @@ fun PositionedWallpaperImage(
         }
     }
 
-    // Map horizontalOffset (0.0 .. 1.0) to horizontalBias (-1.0 .. 1.0)
+    // Map localOffset (0.0 .. 1.0) to horizontalBias (-1.0 .. 1.0)
     val effectiveOffset = if (horizontalOffset in 0f..1f) horizontalOffset else 0.5f
-    val biasX = (effectiveOffset * 2f - 1f)
     var localOffset by remember(horizontalOffset) { mutableFloatStateOf(effectiveOffset) }
+    val biasX = (localOffset * 2f - 1f)
 
     Box(
         modifier = modifier
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .then(
-                if (onDrag != null) {
+                if (onTap != null) {
+                    Modifier.pointerInput(activeUrl) {
+                        detectTapGestures(onTap = { onTap() })
+                    }
+                } else Modifier
+            )
+            .then(
+                if (onDragEnd != null || onDrag != null) {
                     Modifier.pointerInput(activeUrl) {
                         detectHorizontalDragGestures(
                             onHorizontalDrag = { change, dragAmount ->
                                 change.consume()
                                 val delta = dragAmount / 320f
-                                val updated = (localOffset - delta).coerceIn(0f, 1f)
-                                localOffset = updated
-                                onDrag(updated)
+                                localOffset = (localOffset - delta).coerceIn(0f, 1f)
+                                onDrag?.invoke(localOffset)
                             },
                             onDragEnd = {
-                                onDragEnd?.invoke()
+                                onDragEnd?.invoke(localOffset)
                             }
                         )
                     }

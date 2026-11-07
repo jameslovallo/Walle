@@ -66,15 +66,15 @@ object WallpaperRenderHelper {
             paint.colorFilter = ColorMatrixColorFilter(cm)
         }
 
-        val blurRadius = (filters.blur.coerceIn(0f, 0.1f) * 25f).toInt()
-        if (blurRadius >= 1) {
+        val blurPercent = (filters.blur.coerceIn(0f, 0.1f) * 100f).toInt()
+        if (blurPercent >= 1) {
             try {
                 val cropped = Bitmap.createBitmap(bitmap, srcRect.left, srcRect.top, srcRect.width(), srcRect.height())
                 val scaleFactor = 0.25f
                 val smallW = max(1, (cropped.width * scaleFactor).toInt())
                 val smallH = max(1, (cropped.height * scaleFactor).toInt())
                 val scaled = Bitmap.createScaledBitmap(cropped, smallW, smallH, true)
-                val blurred = fastBlur(scaled, (blurRadius * scaleFactor).toInt().coerceAtLeast(1))
+                val blurred = fastBlur(scaled, blurPercent.coerceIn(1, 15))
                 canvas.drawBitmap(blurred, null, dstRect, paint)
                 if (cropped != bitmap) cropped.recycle()
                 if (scaled != blurred) scaled.recycle()

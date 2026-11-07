@@ -52,7 +52,7 @@ data class WallEUIState(
     val localFolderUri: String = "",
     val isScheduleEnabled: Boolean = true,
     val isSlideshowPaused: Boolean = false,
-    val isFavoritesLoading: Boolean = false
+    val isFavoritesLoading: Boolean = true
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -172,6 +172,13 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Track when favorites load from database
+        viewModelScope.launch {
+            favorites.collect {
+                _uiState.value = _uiState.value.copy(isFavoritesLoading = false)
+            }
+        }
+
         // Initial search for Discover grid
         viewModelScope.launch {
             val isNsfw = preferences.isNsfwModeFlow.first()
@@ -284,8 +291,14 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             if (wp.id == id) wp.copy(horizontalOffset = clamped) else wp
         }
         _uiState.value = _uiState.value.copy(discoverWallpapers = updatedList)
+    }
 
-        // Save to cache without favoriting
+    /**
+     * Persists wallpaper horizontal offset to cache and preferences when dragging completes.
+     */
+    fun saveWallpaperOffset(id: String, offset: Float) {
+        val clamped = offset.coerceIn(0f, 1f)
+        updateWallpaperOffset(id, clamped)
         viewModelScope.launch {
             repository.setCachedOffset(id, clamped)
             if (_uiState.value.currentWallpaper.id == id) {
@@ -295,11 +308,41 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Updates and saves current wallpaper offset (e.g. from modal preview dragging).
+     */
+    fun updateCurrentWallpaperOffset(offset: Float) {
+        val clamped = offset.coerceIn(0f, 1f)
+        val current = _uiState.value.currentWallpaper
+        if (current.id.isBlank()) return
+        _uiState.value = _uiState.value.copy(
+            currentWallpaper = current.copy(horizontalOffset = clamped)
+        )
+        viewModelScope.launch {
+            repository.setCachedOffset(current.id, clamped)
+            repository.updateCropOffset(current.id, clamped)
+            preferences.updateCurrentWallpaperOffset(clamped)
+            repository.notifyWallpaperChanged()
+        }
+    }
+
+    /**
+     * Initiates a search in Discover for images similar to a wallpaper by ID using like:id.
+     */
+    fun searchSimilar(wallpaperId: String) {
+        if (wallpaperId.isBlank()) return
+        val targetQuery = "like:$wallpaperId"
+        _uiState.value = _uiState.value.copy(discoverQuery = targetQuery)
+        performSearch(targetQuery)
+    }
+
     fun updateFavoriteOffset(id: String, offset: Float) {
         val clamped = offset.coerceIn(0f, 1f)
         viewModelScope.launch {
             repository.updateCropOffset(id, clamped)
+            repository.setCachedOffset(id, clamped)
             if (_uiState.value.currentWallpaper.id == id) {
+                preferences.updateCurrentWallpaperOffset(clamped)
                 repository.notifyWallpaperChanged()
             }
         }

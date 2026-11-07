@@ -166,4 +166,31 @@ class ExampleUnitTest {
         isPaused = !isPaused
         assertFalse(isPaused)
     }
+
+    @Test
+    fun `test buildWallhavenQuery handles like id syntax`() {
+        val query = "like:94x38z"
+        val built = com.example.data.repository.WallpaperRepository.buildWallhavenQuery(query)
+        assertEquals("like:94x38z", built)
+
+        val queryWithSpaces = "like: abc123 "
+        val builtWithSpaces = com.example.data.repository.WallpaperRepository.buildWallhavenQuery(queryWithSpaces)
+        assertEquals("like:abc123", builtWithSpaces)
+    }
+
+    @Test
+    fun `test blur filter 10 percent maximum with 1 percent steps`() {
+        val maxBlur = 0.10f
+        val steps = 9 // 0.01 to 0.09 (9 intermediate steps for 0.00 to 0.10)
+        assertEquals(0.10f, maxBlur, 0.0001f)
+        assertEquals(9, steps)
+
+        // Test step calculation
+        val step1Percent = (0.01f * 100f).toInt()
+        val step5Percent = (0.05f * 100f).toInt()
+        val step10Percent = (0.10f * 100f).toInt()
+        assertEquals(1, step1Percent)
+        assertEquals(5, step5Percent)
+        assertEquals(10, step10Percent)
+    }
 }

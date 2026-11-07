@@ -56,7 +56,13 @@ class WallpaperRepository(
          * and empty input returns null so Wallhaven serves its broad listing.
          */
         fun buildWallhavenQuery(query: String?): String? {
-            return buildWallhavenQuery(query.orEmpty().split(',', ' '))
+            if (query.isNullOrBlank()) return null
+            val trimmed = query.trim()
+            if (trimmed.startsWith("like:", ignoreCase = true)) {
+                val targetId = trimmed.substringAfter("like:").trim()
+                return if (targetId.isNotBlank()) "like:$targetId" else null
+            }
+            return buildWallhavenQuery(trimmed.split(',', ' '))
         }
 
         /** Builds the Wallhaven `q` query from a list of tags. See [buildWallhavenQuery]. */
@@ -65,7 +71,7 @@ class WallpaperRepository(
                 .flatMap { it.split(',', ' ') }
                 .map { it.trim().trimStart('+', '-') }
                 .map { it.lowercase() }
-                .filter { it.isNotBlank() }
+                .filter { it.isNotBlank() && it != "all" }
                 .distinct()
             return if (cleaned.isEmpty()) null else cleaned.joinToString(" ")
         }
@@ -415,15 +421,33 @@ class WallpaperRepository(
             // Single timeout layer (OkHttp callTimeout only). A second
             // coroutine withTimeout here cancels mid-flight and poisons
             // the pool Coil shares, which hurts slower WiFi paths first.
-            val response = apiService.searchWallpapers(
-                query = wallhavenQuery,
-                categories = categoriesCode,
-                purity = purityCode,
-                sorting = "relevance",
-                order = "desc",
-                page = page,
-                apiKey = apiKey
-            )
+            val sortingMode = if (wallhavenQuery.isNullOrBlank()) "toplist" else "relevance"
+            val response = try {
+                apiService.searchWallpapers(
+                    query = wallhavenQuery,
+                    categories = categoriesCode,
+                    purity = purityCode,
+                    sorting = sortingMode,
+                    order = "desc",
+                    page = page,
+                    apiKey = apiKey
+                )
+            } catch (e: Exception) {
+                if (apiKey != null) {
+                    // Fallback without apiKey if key is invalid or blocked
+                    apiService.searchWallpapers(
+                        query = wallhavenQuery,
+                        categories = categoriesCode,
+                        purity = "100",
+                        sorting = sortingMode,
+                        order = "desc",
+                        page = page,
+                        apiKey = null
+                    )
+                } else {
+                    throw e
+                }
+            }
 
             val meta = response.meta
             val currentPage = meta?.currentPage ?: page

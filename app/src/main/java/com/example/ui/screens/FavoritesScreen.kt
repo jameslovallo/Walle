@@ -4,21 +4,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,17 +28,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.local.FavoriteWallpaper
@@ -54,10 +53,6 @@ fun FavoritesScreen(
     modifier: Modifier = Modifier
 ) {
     val favorites by viewModel.favorites.collectAsState()
-    val currentIds = favorites.map { it.id }.toSet()
-    var loadedIds by remember { mutableStateOf(emptySet<String>()) }
-    val imagesLoaded = currentIds.isNotEmpty() && loadedIds.containsAll(currentIds)
-    val showLoading = uiState.isFavoritesLoading || (favorites.isNotEmpty() && !imagesLoaded)
 
     Box(
         modifier = modifier
@@ -65,7 +60,7 @@ fun FavoritesScreen(
             .testTag("favorites_screen_container"),
         contentAlignment = Alignment.Center
     ) {
-        if (showLoading) {
+        if (uiState.isFavoritesLoading) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -78,6 +73,33 @@ fun FavoritesScreen(
                 Text(
                     text = "Loading favorites...",
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (favorites.isEmpty()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .padding(32.dp)
+                    .testTag("favorites_empty_state")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FavoriteBorder,
+                    contentDescription = null,
+                    modifier = Modifier.size(56.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = "No favorites yet",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Heart wallpapers from Discover or your folder to add them to your rotation.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -99,30 +121,10 @@ fun FavoritesScreen(
                         favorite = fav,
                         onDeleteClick = { viewModel.deleteFavorite(fav.id) },
                         onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
-                        onDragOffset = { newOffset ->
+                        onDragEnd = { newOffset ->
                             viewModel.updateFavoriteOffset(fav.id, newOffset)
-                        },
-                        onLoaded = {
-                            loadedIds = loadedIds + fav.id
                         }
                     )
-                }
-
-                if (uiState.isFavoritesLoading) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(32.dp),
-                                color = MaterialTheme.colorScheme.primary,
-                                strokeWidth = 3.dp
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -134,8 +136,7 @@ fun FavoriteCard(
     favorite: FavoriteWallpaper,
     onDeleteClick: () -> Unit,
     onItemClick: () -> Unit,
-    onDragOffset: (Float) -> Unit,
-    onLoaded: () -> Unit
+    onDragEnd: (Float) -> Unit
 ) {
     val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
     var localOffset by remember(effectiveOffset) { mutableFloatStateOf(effectiveOffset) }
@@ -156,8 +157,7 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        // Image with horizontal drag gesture: live preview during drag (smooth, no DB writes),
-        // debounced persist only on drag end.
+        // Image with smooth horizontal drag gesture; positioning data is saved only when user input is completed
         PositionedWallpaperImage(
             url = favorite.thumbUrl.ifBlank { favorite.url },
             fallbackUrl = favorite.url,
@@ -166,9 +166,8 @@ fun FavoriteCard(
                 localOffset = newOffset
             },
             onDragEnd = {
-                onDragOffset(localOffset)
+                onDragEnd(localOffset)
             },
-            onLoadComplete = onLoaded,
             modifier = Modifier.fillMaxSize()
         )
 

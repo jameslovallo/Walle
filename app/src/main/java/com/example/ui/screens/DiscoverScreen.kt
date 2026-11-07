@@ -95,7 +95,11 @@ fun DiscoverScreen(
         }
     }
 
-    // Reset scroll to top when a new search (term, category, purity, or mode) starts
+    // Reset scroll to top when changing mode or starting a new search
+    LaunchedEffect(isNsfw) {
+        gridState.scrollToItem(0)
+    }
+
     LaunchedEffect(uiState.searchGeneration) {
         gridState.scrollToItem(0)
     }
@@ -170,7 +174,7 @@ fun DiscoverScreen(
                         DiscoverWallpaperCard(
                             wallpaper = wallpaper,
                             onDragOffset = { newOffset ->
-                                viewModel.updateWallpaperOffset(wallpaper.id, newOffset)
+                                viewModel.saveWallpaperOffset(wallpaper.id, newOffset)
                             },
                             onToggleFavorite = {
                                 viewModel.toggleFavoriteWallpaper(wallpaper)
@@ -448,9 +452,7 @@ fun DiscoverWallpaperCard(
                 localOffset = newOffset
             },
             onDragEnd = {
-                if (wallpaper.isFavorite) {
-                    onDragOffset(localOffset)
-                }
+                onDragOffset(localOffset)
             },
             modifier = Modifier.fillMaxSize()
         )
