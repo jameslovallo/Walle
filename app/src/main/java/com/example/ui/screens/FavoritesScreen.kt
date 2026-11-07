@@ -26,17 +26,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.example.data.local.FavoriteWallpaper
 import com.example.ui.WallEViewModel
+import com.example.ui.components.PositionedWallpaperImage
 
 @Composable
 fun FavoritesScreen(
@@ -61,7 +63,10 @@ fun FavoritesScreen(
             FavoriteCard(
                 favorite = fav,
                 onDeleteClick = { viewModel.deleteFavorite(fav.id) },
-                onItemClick = { viewModel.applyFavoriteAsCurrent(fav) }
+                onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
+                onDragOffset = { newOffset ->
+                    viewModel.updateFavoriteOffset(fav.id, newOffset)
+                }
             )
         }
     }
@@ -71,8 +76,12 @@ fun FavoritesScreen(
 fun FavoriteCard(
     favorite: FavoriteWallpaper,
     onDeleteClick: () -> Unit,
-    onItemClick: () -> Unit
+    onItemClick: () -> Unit,
+    onDragOffset: (Float) -> Unit
 ) {
+    val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
+    var localOffset by remember(effectiveOffset) { mutableFloatStateOf(effectiveOffset) }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -82,17 +91,15 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
-        val biasX = (effectiveOffset * 2f - 1f)
-
-        AsyncImage(
-            model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                .data(favorite.thumbUrl.ifBlank { favorite.url })
-                .crossfade(true)
-                .build(),
-            contentDescription = "Favorite image",
-            contentScale = ContentScale.Crop,
-            alignment = androidx.compose.ui.BiasAlignment(biasX, 0f),
+        // Image with horizontal drag gesture: dragging updates the saved position
+        PositionedWallpaperImage(
+            url = favorite.thumbUrl.ifBlank { favorite.url },
+            fallbackUrl = favorite.url,
+            horizontalOffset = localOffset,
+            onDrag = { newOffset ->
+                localOffset = newOffset
+                onDragOffset(newOffset)
+            },
             modifier = Modifier.fillMaxSize()
         )
 

@@ -274,6 +274,16 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateFavoriteOffset(id: String, offset: Float) {
+        val clamped = offset.coerceIn(0f, 1f)
+        viewModelScope.launch {
+            repository.updateCropOffset(id, clamped)
+            if (_uiState.value.currentWallpaper.id == id) {
+                repository.notifyWallpaperChanged()
+            }
+        }
+    }
+
     fun lazyDetectOffset(wallpaper: Wallpaper) {
         viewModelScope.launch {
             if (repository.isOffsetCached(wallpaper.id)) {

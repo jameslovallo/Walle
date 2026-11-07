@@ -260,7 +260,11 @@ class WallpaperRepository(
     suspend fun updateCropOffset(id: String, offset: Float) = withContext(Dispatchers.IO) {
         val clamped = offset.coerceIn(0f, 1f)
         setCachedOffset(id, clamped)
-        preferences.updateCurrentWallpaperOffset(clamped)
+        // Only update the live wallpaper offset if this is the active wallpaper,
+        // so repositioning other favorites does not disturb it.
+        if (preferences.currentWallpaperFlow.first().id == id) {
+            preferences.updateCurrentWallpaperOffset(clamped)
+        }
         val isFav = favoriteDao.isFavoriteDirect(id)
         if (isFav) {
             favoriteDao.updateCropOffset(id, clamped)
