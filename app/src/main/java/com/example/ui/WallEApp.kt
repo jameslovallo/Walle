@@ -76,7 +76,7 @@ fun WallEApp(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Wall-e",
+                        text = "WallHeaven",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleLarge
                     )

@@ -22,7 +22,7 @@ object NetworkClient {
         .retryOnConnectionFailure(true)
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
-                .header("User-Agent", "Wall-e/2.0 (Android; Mobile)")
+                .header("User-Agent", "WallHeaven/2.0 (Android; Mobile)")
                 .build()
             chain.proceed(request)
         }
