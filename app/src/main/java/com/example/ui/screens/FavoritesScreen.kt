@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -36,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -52,6 +54,10 @@ fun FavoritesScreen(
     modifier: Modifier = Modifier
 ) {
     val favorites by viewModel.favorites.collectAsState()
+    val currentIds = favorites.map { it.id }.toSet()
+    var loadedIds by remember { mutableStateOf(emptySet<String>()) }
+    val imagesLoaded = currentIds.isNotEmpty() && loadedIds.containsAll(currentIds)
+    val showLoading = uiState.isFavoritesLoading || (favorites.isNotEmpty() && !imagesLoaded)
 
     Box(
         modifier = modifier
@@ -59,7 +65,7 @@ fun FavoritesScreen(
             .testTag("favorites_screen_container"),
         contentAlignment = Alignment.Center
     ) {
-        if (uiState.isFavoritesLoading && favorites.isEmpty()) {
+        if (showLoading) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -95,6 +101,9 @@ fun FavoritesScreen(
                         onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
                         onDragOffset = { newOffset ->
                             viewModel.updateFavoriteOffset(fav.id, newOffset)
+                        },
+                        onLoaded = {
+                            loadedIds = loadedIds + fav.id
                         }
                     )
                 }
@@ -125,15 +134,23 @@ fun FavoriteCard(
     favorite: FavoriteWallpaper,
     onDeleteClick: () -> Unit,
     onItemClick: () -> Unit,
-    onDragOffset: (Float) -> Unit
+    onDragOffset: (Float) -> Unit,
+    onLoaded: () -> Unit
 ) {
     val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
     var localOffset by remember(effectiveOffset) { mutableFloatStateOf(effectiveOffset) }
 
+    val displayMetrics = LocalContext.current.resources.displayMetrics
+    val deviceAspect = if (displayMetrics.heightPixels > 0) {
+        displayMetrics.widthPixels.toFloat() / displayMetrics.heightPixels.toFloat()
+    } else {
+        9f / 20f
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(9f / 16f)
+            .aspectRatio(deviceAspect)
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable { onItemClick() }
@@ -151,6 +168,7 @@ fun FavoriteCard(
             onDragEnd = {
                 onDragOffset(localOffset)
             },
+            onLoadComplete = onLoaded,
             modifier = Modifier.fillMaxSize()
         )
 

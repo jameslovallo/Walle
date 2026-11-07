@@ -57,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -92,6 +93,11 @@ fun DiscoverScreen(
         if (shouldLoadMore && !uiState.isDiscoverLoading && !uiState.isDiscoverLoadingMore && !uiState.discoverHasReachedEnd) {
             viewModel.loadNextPage()
         }
+    }
+
+    // Reset scroll to top when a new search (term, category, purity, or mode) starts
+    LaunchedEffect(uiState.searchGeneration) {
+        gridState.scrollToItem(0)
     }
 
     Column(
@@ -416,10 +422,17 @@ fun DiscoverWallpaperCard(
 
     var localOffset by remember(wallpaper.horizontalOffset) { mutableFloatStateOf(wallpaper.horizontalOffset) }
 
+    val displayMetrics = LocalContext.current.resources.displayMetrics
+    val deviceAspect = if (displayMetrics.heightPixels > 0) {
+        displayMetrics.widthPixels.toFloat() / displayMetrics.heightPixels.toFloat()
+    } else {
+        9f / 20f
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(9f / 16f)
+            .aspectRatio(deviceAspect)
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable { onCardClick() }

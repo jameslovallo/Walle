@@ -11,6 +11,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -40,13 +41,20 @@ fun PositionedWallpaperImage(
     modifier: Modifier = Modifier,
     fallbackUrl: String? = null,
     onDrag: ((Float) -> Unit)? = null,
-    onDragEnd: (() -> Unit)? = null
+    onDragEnd: (() -> Unit)? = null,
+    onLoadComplete: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var isError by remember(url) { mutableStateOf(false) }
     var isLoading by remember(url) { mutableStateOf(true) }
 
     val activeUrl = if (isError && !fallbackUrl.isNullOrBlank()) fallbackUrl else url.ifBlank { fallbackUrl ?: "" }
+
+    LaunchedEffect(isLoading, activeUrl) {
+        if (!isLoading || activeUrl.isBlank()) {
+            onLoadComplete?.invoke()
+        }
+    }
 
     // Map horizontalOffset (0.0 .. 1.0) to horizontalBias (-1.0 .. 1.0)
     val effectiveOffset = if (horizontalOffset in 0f..1f) horizontalOffset else 0.5f

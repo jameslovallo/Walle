@@ -19,10 +19,12 @@ import com.example.data.model.WallhavenImageItem
 import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -40,6 +42,7 @@ class WallpaperRepository(
     private val imageLoader = ImageLoader(context)
     private val positioningPrefs = context.getSharedPreferences("walle_positioning_cache", Context.MODE_PRIVATE)
     private val memoryOffsetCache = java.util.concurrent.ConcurrentHashMap<String, Float>()
+    private val folderMutex = Mutex()
 
     companion object {
         /**
@@ -201,60 +204,69 @@ class WallpaperRepository(
     suspend fun deleteFavorite(id: String) = withContext(Dispatchers.IO) {
         if (id.isBlank()) return@withContext
 
-        // 1. Remove from Room DB (this drives the Favorites grid Flow view update)
-        favoriteDao.deleteById(id)
-        memoryOffsetCache.remove(id)
-        positioningPrefs.edit().remove(id).apply()
-
-        // 3. Remove internal thumbnail
-        try {
-            val thumbFile = getInternalThumbnailFile(id)
-            if (thumbFile.exists()) {
-                thumbFile.delete()
+        // Apply a replacement BEFORE deleting when the deleted item is live
+        // on the homescreen, so the live wallpaper never points at a
+        // just-deleted file/thumbnail URI.
+        val currentBefore = preferences.currentWallpaperFlow.first()
+        if (currentBefore.id == id) {
+            try {
+                val next = applyNextScheduledFavoriteWallpaper()
+                if (next.isFailure) {
+                    fetchAndApplyNextWallpaper()
+                }
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Error advancing wallpaper before deleting current", e)
             }
-        } catch (e: Exception) {
-            Log.e("WallpaperRepo", "Error deleting thumbnail for $id", e)
         }
 
-        // 4. Remove physical file from user folder (sfw/, nsfw/, root) if folder is configured
-        val folderUriString = preferences.localFolderUriFlow.first()
-        if (folderUriString.isNotBlank()) {
+        // Serialize folder/index mutations so a concurrent folder sync
+        // cannot resurrect the deleted row from a stale snapshot.
+        folderMutex.withLock {
+            // 1. Remove from Room DB (this drives the Favorites grid Flow view update)
+            favoriteDao.deleteById(id)
+            memoryOffsetCache.remove(id)
+            positioningPrefs.edit().remove(id).apply()
+
+            // 3. Remove internal thumbnail
             try {
-                val folderUri = Uri.parse(folderUriString)
-                val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
-                if (rootDoc != null && rootDoc.exists() && rootDoc.canWrite()) {
-                    val subDirs = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
-                    for (dir in subDirs) {
-                        if (dir.exists() && dir.isDirectory) {
-                            for (f in dir.listFiles()) {
-                                val name = f.name ?: continue
-                                val base = name.substringBeforeLast('.')
-                                val cleanId = if (base.startsWith("wallhaven-", ignoreCase = true)) {
-                                    base.substringAfter("wallhaven-")
-                                } else {
-                                    base
-                                }
-                                if (cleanId.equals(id, ignoreCase = true)) {
-                                    f.delete()
+                val thumbFile = getInternalThumbnailFile(id)
+                if (thumbFile.exists()) {
+                    thumbFile.delete()
+                }
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Error deleting thumbnail for $id", e)
+            }
+
+            // 4. Remove physical file from user folder (sfw/, nsfw/, root) if folder is configured
+            val folderUriString = preferences.localFolderUriFlow.first()
+            if (folderUriString.isNotBlank()) {
+                try {
+                    val folderUri = Uri.parse(folderUriString)
+                    val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
+                    if (rootDoc != null && rootDoc.exists() && rootDoc.canWrite()) {
+                        val subDirs = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
+                        for (dir in subDirs) {
+                            if (dir.exists() && dir.isDirectory) {
+                                for (f in dir.listFiles()) {
+                                    val name = f.name ?: continue
+                                    val base = name.substringBeforeLast('.')
+                                    val cleanId = if (base.startsWith("wallhaven-", ignoreCase = true)) {
+                                        base.substringAfter("wallhaven-")
+                                    } else {
+                                        base
+                                    }
+                                    if (cleanId.equals(id, ignoreCase = true)) {
+                                        f.delete()
+                                    }
                                 }
                             }
                         }
+                        // Update index.json to purge deleted item
+                        updateFolderMetadataIndex(rootDoc)
                     }
-                    // Update index.json to purge deleted item
-                    updateFolderMetadataIndex(rootDoc)
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error deleting file from local folder for $id", e)
                 }
-            } catch (e: Exception) {
-                Log.e("WallpaperRepo", "Error deleting file from local folder for $id", e)
-            }
-        }
-
-        // 5. If this deleted item is currently active on screen, immediately advance to the next wallpaper
-        val current = preferences.currentWallpaperFlow.first()
-        if (current.id == id) {
-            try {
-                fetchAndApplyNextWallpaper()
-            } catch (e: Exception) {
-                Log.e("WallpaperRepo", "Error advancing wallpaper after deleting current", e)
             }
         }
     }
@@ -400,17 +412,18 @@ class WallpaperRepository(
         val wallhavenQuery = buildWallhavenQuery(query)
 
         try {
-            val response = kotlinx.coroutines.withTimeout(20000L) {
-                apiService.searchWallpapers(
-                    query = wallhavenQuery,
-                    categories = categoriesCode,
-                    purity = purityCode,
-                    sorting = "relevance",
-                    order = "desc",
-                    page = page,
-                    apiKey = apiKey
-                )
-            }
+            // Single timeout layer (OkHttp callTimeout only). A second
+            // coroutine withTimeout here cancels mid-flight and poisons
+            // the pool Coil shares, which hurts slower WiFi paths first.
+            val response = apiService.searchWallpapers(
+                query = wallhavenQuery,
+                categories = categoriesCode,
+                purity = purityCode,
+                sorting = "relevance",
+                order = "desc",
+                page = page,
+                apiKey = apiKey
+            )
 
             val meta = response.meta
             val currentPage = meta?.currentPage ?: page
@@ -616,16 +629,14 @@ class WallpaperRepository(
         val wallhavenQuery = buildWallhavenQuery(targetTags)
 
         val response = try {
-            kotlinx.coroutines.withTimeout(20000L) {
-                apiService.searchWallpapers(
-                    query = wallhavenQuery,
-                    categories = categoriesCode,
-                    purity = purityCode,
-                    sorting = "relevance",
-                    order = "desc",
-                    apiKey = apiKey
-                )
-            }
+            apiService.searchWallpapers(
+                query = wallhavenQuery,
+                categories = categoriesCode,
+                purity = purityCode,
+                sorting = "relevance",
+                order = "desc",
+                apiKey = apiKey
+            )
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Wallhaven search failed for '$wallhavenQuery': ${e.message}", e)
             return null
@@ -830,9 +841,10 @@ class WallpaperRepository(
         if (folderUriString.isBlank()) return@withContext
 
         try {
+            folderMutex.withLock {
             val folderUri = Uri.parse(folderUriString)
-            val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext
-            if (!rootDoc.canRead()) return@withContext
+            val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withLock
+            if (!rootDoc.canRead()) return@withLock
 
             // Ensure .nomedia in root to prevent recent files clutter
             if (rootDoc.canWrite() && rootDoc.findFile(".nomedia") == null) {
@@ -975,6 +987,7 @@ class WallpaperRepository(
             // 5. Update/refresh index.json in the user folder so it reflects all favorites
             updateFolderMetadataIndex(rootDoc)
             notifyWallpaperChanged()
+            }
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error syncing and loading from selected folder", e)
         }

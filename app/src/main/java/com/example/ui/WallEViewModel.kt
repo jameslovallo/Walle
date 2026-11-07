@@ -36,6 +36,7 @@ data class WallEUIState(
     val discoverLastPage: Int = 1,
     val discoverTotal: Int = 0,
     val discoverHasReachedEnd: Boolean = false,
+    val searchGeneration: Int = 0,
     // Legacy tags & mode filters
     val savedSfwTags: Set<String> = emptySet(),
     val activeSfwTags: Set<String> = emptySet(),
@@ -197,6 +198,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             discoverQuery = q,
             discoverCurrentPage = 1,
             discoverHasReachedEnd = false,
+            searchGeneration = _uiState.value.searchGeneration + 1,
             isDiscoverLoading = true
         )
         viewModelScope.launch {

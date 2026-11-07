@@ -3,7 +3,7 @@ package com.example.data.api
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
+import okhttp3.Protocol
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.util.concurrent.TimeUnit
@@ -17,8 +17,11 @@ object NetworkClient {
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         // WiFi DNS / AP roaming is often slower/more lossy than mobile data.
-        // The previous 6s/8s timeouts could expire mid-handshake on congested
-        // or IPv6-broken WiFi before OkHttp's Happy Eyeballs fell back to IPv4.
+        // HTTP/2 upgrade is a common failure point behind home-router middleboxes
+        // (works on cellular, hangs on WiFi). Force HTTP/1.1 for a predictable
+        // WiFi path; single OkHttp timeout layer (no coroutine withTimeout
+        // cancelling mid-flight and poisoning the pool Coil shares).
+        .protocols(listOf(Protocol.HTTP_1_1))
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
@@ -26,13 +29,10 @@ object NetworkClient {
         .retryOnConnectionFailure(true)
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
-                .header("User-Agent", "WallHeaven/2.0 (Android; Mobile)")
+                .header("User-Agent", "WallHeaven/2.0")
                 .build()
             chain.proceed(request)
         }
-        .addInterceptor(HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        })
         .build()
 
     private val retrofit: Retrofit = Retrofit.Builder()
