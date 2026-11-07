@@ -52,7 +52,14 @@ data class WallEUIState(
     val localFolderUri: String = "",
     val isScheduleEnabled: Boolean = true,
     val isSlideshowPaused: Boolean = false,
-    val isFavoritesLoading: Boolean = true
+    val isFavoritesLoading: Boolean = true,
+    // App Update
+    val updateInfo: com.example.update.AppUpdateInfo = com.example.update.AppUpdateInfo(),
+    val isCheckingForUpdate: Boolean = false,
+    val isDownloadingUpdate: Boolean = false,
+    val downloadProgress: Float = 0f,
+    val updateError: String? = null,
+    val githubRepo: String = "lovallo/WallHeaven"
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -192,6 +199,18 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 discoverQuery = initialQuery
             )
             performSearch(initialQuery)
+        }
+
+        // Collect repository preference for updates and run silent check
+        viewModelScope.launch {
+            preferences.githubRepoFlow.collect { repo ->
+                _uiState.value = _uiState.value.copy(githubRepo = repo)
+            }
+        }
+
+        // Silent check for update on app startup
+        viewModelScope.launch {
+            checkForUpdate()
         }
     }
 
@@ -545,6 +564,62 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             preferences.setLocalFolderUri(uri)
             if (uri.isNotBlank()) {
                 loadFavoritesFromFolder(uri)
+            }
+        }
+    }
+
+    fun setGithubRepo(repo: String) {
+        viewModelScope.launch {
+            preferences.setGithubRepo(repo)
+            checkForUpdate()
+        }
+    }
+
+    fun checkForUpdate() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isCheckingForUpdate = true, updateError = null)
+            try {
+                val currentVersion = com.example.BuildConfig.VERSION_NAME
+                val repo = preferences.githubRepoFlow.first()
+                val info = com.example.update.AppUpdateManager.checkForUpdate(currentVersion, repo)
+                _uiState.value = _uiState.value.copy(
+                    updateInfo = info,
+                    isCheckingForUpdate = false
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isCheckingForUpdate = false,
+                    updateError = e.message
+                )
+            }
+        }
+    }
+
+    fun downloadAndInstallUpdate(context: Context) {
+        val info = _uiState.value.updateInfo
+        if (!info.isUpdateAvailable || info.apkDownloadUrl.isBlank()) return
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isDownloadingUpdate = true,
+                downloadProgress = 0f,
+                updateError = null
+            )
+            val result = com.example.update.AppUpdateManager.downloadAndInstallApk(
+                context = context,
+                apkUrl = info.apkDownloadUrl,
+                fileName = info.apkFileName,
+                onProgress = { progress ->
+                    _uiState.value = _uiState.value.copy(downloadProgress = progress)
+                }
+            )
+            if (result.isFailure) {
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingUpdate = false,
+                    updateError = result.exceptionOrNull()?.message ?: "Installation failed"
+                )
+            } else {
+                _uiState.value = _uiState.value.copy(isDownloadingUpdate = false)
             }
         }
     }

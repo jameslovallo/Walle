@@ -61,6 +61,11 @@ class AppPreferences(private val context: Context) {
         val KEY_DELETED_WALLPAPER_IDS = stringSetPreferencesKey("deleted_wallpaper_ids")
         val KEY_IS_SCHEDULE_ENABLED = booleanPreferencesKey("is_schedule_enabled")
         val KEY_IS_SLIDESHOW_PAUSED = booleanPreferencesKey("is_slideshow_paused")
+        val KEY_GITHUB_REPO = stringPreferencesKey("github_repo")
+    }
+
+    val githubRepoFlow: Flow<String> = context.dataStore.data.map {
+        it[KEY_GITHUB_REPO] ?: "lovallo/WallHeaven"
     }
 
     val isSlideshowPausedFlow: Flow<Boolean> = context.dataStore.data.map {
@@ -282,6 +287,12 @@ class AppPreferences(private val context: Context) {
         context.dataStore.edit {
             val current = it[KEY_DELETED_WALLPAPER_IDS] ?: emptySet()
             it[KEY_DELETED_WALLPAPER_IDS] = current - id
+        }
+    }
+
+    suspend fun setGithubRepo(repo: String) {
+        context.dataStore.edit {
+            it[KEY_GITHUB_REPO] = repo
         }
     }
 }

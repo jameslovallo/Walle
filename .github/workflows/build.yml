@@ -2,9 +2,12 @@ name: Build Android App
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -13,6 +16,8 @@ jobs:
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -23,11 +28,17 @@ jobs:
     # Set up and use a pre-installed Gradle environment
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
-      
-    # Generates the debug keystore exactly where your gradle configuration expects it
-    - name: Create Debug Keystore
+
+    # Restore the debug keystore from the repository's base64 encoded debug keystore
+    # This guarantees consistent signing across all CI builds and avoids INSTALL_FAILED_UPDATE_INCOMPATIBLE
+    - name: Restore Debug Keystore
       run: |
-        keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        if [ -f "debug.keystore.base64" ]; then
+          base64 -d debug.keystore.base64 > debug.keystore
+        elif [ ! -f "debug.keystore" ]; then
+          echo "debug.keystore.base64 not found, generating fallback keystore"
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        fi
 
     # Execute the build directly using the system-installed gradle
     - name: Build with Gradle
@@ -38,3 +49,38 @@ jobs:
       with:
         name: app-debug
         path: app/build/outputs/apk/debug/app-debug.apk
+
+    # Auto tag +x.x.1 release and publish GitHub Release on push to master/main
+    - name: Create Release and Tag
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Find latest semver tag vX.Y.Z
+        LATEST_TAG=$(git tag -l "v*.*.*" | sort -V | tail -n 1)
+        if [ -z "$LATEST_TAG" ]; then
+          # Fallback to tag from gradle or initial 1.1.0
+          NEW_TAG="v1.1.1"
+        else
+          # Extract major, minor, patch
+          CLEAN_TAG="${LATEST_TAG#v}"
+          MAJOR=$(echo "$CLEAN_TAG" | cut -d. -f1)
+          MINOR=$(echo "$CLEAN_TAG" | cut -d. -f2)
+          PATCH=$(echo "$CLEAN_TAG" | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+        fi
+
+        echo "Computed next release tag: $NEW_TAG"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
+        git push origin "$NEW_TAG"
+
+        APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+        RELEASE_APK="WallHeaven-${NEW_TAG}.apk"
+        cp "$APK_PATH" "$RELEASE_APK"
+
+        gh release create "$NEW_TAG" "$RELEASE_APK" \
+          --title "WallHeaven $NEW_TAG" \
+          --notes "Automatic release $NEW_TAG built from commit $(git rev-parse --short HEAD)."
