@@ -81,8 +81,8 @@ import com.example.ui.screens.FavoritesScreen
 import com.example.ui.screens.SettingsScreen
 
 enum class NavigationTab(val title: String) {
-    DISCOVER("Discover"),
     FAVORITES("Favorites"),
+    DISCOVER("Discover"),
     SETTINGS("Settings")
 }
 
@@ -209,19 +209,19 @@ fun WallEApp(
         ) {
             Crossfade(targetState = selectedTabIndex, label = "tab_crossfade") { tabIndex ->
                 when (tabIndex) {
-                    0 -> DiscoverScreen(
-                        viewModel = viewModel,
-                        uiState = uiState,
-                        onOpenNowPlaying = { showCurrentFavoriteModal = true }
-                    )
-                    1 -> FavoritesScreen(
+                    0 -> FavoritesScreen(
                         viewModel = viewModel,
                         uiState = uiState,
                         onOpenNowPlaying = { showCurrentFavoriteModal = true },
                         onFindSimilar = { wallpaperId ->
-                            selectedTabIndex = 0
+                            selectedTabIndex = 1
                             viewModel.searchSimilar(wallpaperId)
                         }
+                    )
+                    1 -> DiscoverScreen(
+                        viewModel = viewModel,
+                        uiState = uiState,
+                        onOpenNowPlaying = { showCurrentFavoriteModal = true }
                     )
                     2 -> SettingsScreen(
                         viewModel = viewModel,
@@ -253,7 +253,7 @@ fun WallEApp(
                 },
                 onFindSimilar = { wallpaperId ->
                     showCurrentFavoriteModal = false
-                    selectedTabIndex = 0
+                    selectedTabIndex = 1
                     viewModel.searchSimilar(wallpaperId)
                 }
             )

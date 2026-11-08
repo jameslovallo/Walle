@@ -22,7 +22,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,50 +56,12 @@ fun FavoritesScreen(
 ) {
     val favorites by viewModel.favorites.collectAsState()
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .testTag("favorites_screen_container")
+            .testTag("favorites_screen_container"),
+        contentAlignment = Alignment.Center
     ) {
-        val total = uiState.optimizationTotal
-        val optimized = uiState.optimizationOptimized
-        if (total > 0 && (uiState.isOptimizingLibrary || optimized < total)) {
-            val percent = (optimized * 100 / total).coerceIn(0, 100)
-            val fraction = (optimized.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .testTag("library_optimization_banner"),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = "Optimizing library (4K max · WebP): $optimized of $total ($percent%)",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-                if (!uiState.isOptimizingLibrary && uiState.optimizationLastError.isNotBlank()) {
-                    Text(
-                        text = uiState.optimizationLastError,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-        }
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
         if (favorites.isEmpty()) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -155,7 +116,6 @@ fun FavoritesScreen(
                     )
                 }
             }
-        }
         }
     }
 }
