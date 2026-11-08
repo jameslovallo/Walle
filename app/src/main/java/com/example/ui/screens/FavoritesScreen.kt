@@ -52,6 +52,7 @@ fun FavoritesScreen(
     viewModel: WallEViewModel,
     uiState: WallEUIState,
     onOpenNowPlaying: () -> Unit,
+    onFindSimilar: (String) -> Unit = { viewModel.searchSimilar(it) },
     modifier: Modifier = Modifier
 ) {
     val favorites by viewModel.favorites.collectAsState()
@@ -149,7 +150,7 @@ fun FavoritesScreen(
                             onOpenNowPlaying()
                         },
                         onFindSimilar = {
-                            viewModel.searchSimilar(fav.id)
+                            onFindSimilar(fav.id)
                         }
                     )
                 }

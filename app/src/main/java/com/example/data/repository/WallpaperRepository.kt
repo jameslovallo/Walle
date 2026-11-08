@@ -385,6 +385,8 @@ class WallpaperRepository(
     /**
      * Applies the next wallpaper strictly from the saved Favorites.
      * When scheduled, wallpapers only cycle through user favorites.
+     * Next is selected at random (not in sequence), avoiding the current
+     * wallpaper when more than one favorite exists.
      */
     suspend fun applyNextScheduledFavoriteWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
@@ -396,13 +398,8 @@ class WallpaperRepository(
             }
 
             val current = preferences.currentWallpaperFlow.first()
-            val currentIndex = favorites.indexOfFirst { it.id == current.id }
-            val nextIndex = if (currentIndex != -1) {
-                (currentIndex + 1) % favorites.size
-            } else {
-                0
-            }
-            val candidate = favorites[nextIndex]
+            val others = favorites.filter { it.id != current.id }
+            val candidate = others.randomOrNull() ?: favorites.random()
 
             applyFavorite(candidate)
 

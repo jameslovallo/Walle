@@ -217,7 +217,11 @@ fun WallEApp(
                     1 -> FavoritesScreen(
                         viewModel = viewModel,
                         uiState = uiState,
-                        onOpenNowPlaying = { showCurrentFavoriteModal = true }
+                        onOpenNowPlaying = { showCurrentFavoriteModal = true },
+                        onFindSimilar = { wallpaperId ->
+                            selectedTabIndex = 0
+                            viewModel.searchSimilar(wallpaperId)
+                        }
                     )
                     2 -> SettingsScreen(
                         viewModel = viewModel,

@@ -68,7 +68,7 @@ class WallELiveWallpaperService : WallpaperService() {
         private var touchDownX = 0f
         private var touchDownY = 0f
         private var isLongPressFired = false
-        private val longPressThreshold = 550L
+        private val longPressThreshold = 1100L
         private val longPressRunnable = Runnable {
             isLongPressFired = true
             handleLongPress(touchDownX, touchDownY)
