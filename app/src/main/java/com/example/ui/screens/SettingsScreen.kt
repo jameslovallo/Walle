@@ -63,6 +63,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.LinearProgressIndicator
 import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
 import com.example.wallpaper.WallELiveWallpaperService
@@ -513,13 +514,19 @@ fun SettingsScreen(
                     )
                 }
 
-                // Image Compression Controls (Below folder selection)
+                // Library optimization status (always on by default: 4K max, WebP)
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp),
+                        .padding(vertical = 4.dp)
+                        .testTag("library_optimization_section"),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    val total = uiState.optimizationTotal
+                    val optimized = uiState.optimizationOptimized
+                    val percent = if (total > 0) (optimized * 100 / total) else 100
+                    val fraction = if (total > 0) (optimized.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 1f
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -536,13 +543,12 @@ fun SettingsScreen(
                                 modifier = Modifier.size(20.dp)
                             )
                             Text(
-                                text = "Max Resolution & Compression",
+                                text = "Library Optimization",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
-
-                        if (uiState.isCompressingWallpapers) {
+                        if (uiState.isOptimizingLibrary) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(18.dp),
                                 strokeWidth = 2.dp,
@@ -552,43 +558,48 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Downscale images to the target resolution and compress with high efficiency WebP format in the background.",
+                        text = "Images are optimized automatically in the background: capped at 4K and converted to WebP.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    val resolutionOptions = listOf(
-                        "original" to "Original",
-                        "4k" to "4K",
-                        "1080p" to "1080p",
-                        "device" to "Device"
-                    )
-
-                    SingleChoiceSegmentedButtonRow(
+                    LinearProgressIndicator(
+                        progress = { fraction },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("compression_resolution_scale_row")
+                            .height(8.dp)
+                            .testTag("library_optimization_progress"),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        resolutionOptions.forEachIndexed { index, (scaleKey, scaleLabel) ->
-                            val isSelected = uiState.maxResolutionScale.equals(scaleKey, ignoreCase = true)
-                            SegmentedButton(
-                                selected = isSelected,
-                                onClick = {
-                                    viewModel.setMaxResolutionScale(scaleKey)
-                                },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = resolutionOptions.size
-                                ),
-                                label = {
-                                    Text(
-                                        text = scaleLabel,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                }
-                            )
-                        }
+                        Text(
+                            text = if (total == 0) "No library files yet" else "$optimized of $total optimized",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "$percent%",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (uiState.isOptimizingLibrary && total > 0) {
+                        Text(
+                            text = "Optimizing in background — you can keep using the app.",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else if (total > 0 && optimized >= total) {
+                        Text(
+                            text = "Library fully optimized.",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
 

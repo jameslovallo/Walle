@@ -160,10 +160,12 @@ fun WallEApp(
                                     .background(MaterialTheme.colorScheme.primaryContainer),
                                 contentAlignment = Alignment.Center
                             ) {
+                                val clampedOffset = uiState.currentWallpaper.horizontalOffset.coerceIn(0f, 1f)
                                 AsyncImage(
                                     model = currentThumb,
                                     contentDescription = "Current Favorite",
                                     contentScale = ContentScale.Crop,
+                                    alignment = androidx.compose.ui.BiasAlignment((clampedOffset * 2f - 1f), 0f),
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
@@ -326,9 +328,14 @@ fun CurrentFavoriteModalContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .testTag("modal_preview_card")
         ) {
-            // Seamless crossfade transition between wallpapers when skipped
+            // Seamless crossfade transition between wallpapers when skipped.
+            // Keyed on identity only so a positioning change repositions the
+            // image without re-triggering the fade / reload.
+            val wallpaperKey = remember(currentWallpaper.id, currentWallpaper.url) {
+                currentWallpaper.id.ifBlank { currentWallpaper.url }
+            }
             AnimatedContent(
-                targetState = currentWallpaper,
+                targetState = wallpaperKey,
                 transitionSpec = {
                     fadeIn(
                         animationSpec = androidx.compose.animation.core.tween(durationMillis = 400)
@@ -337,7 +344,8 @@ fun CurrentFavoriteModalContent(
                     )
                 },
                 label = "wallpaper_fade_preview"
-            ) { targetWp ->
+            ) {
+                val targetWp = currentWallpaper
                 val url = targetWp.url.ifBlank { targetWp.thumbUrl }
                 if (url.isNotBlank()) {
                     PositionedWallpaperImage(

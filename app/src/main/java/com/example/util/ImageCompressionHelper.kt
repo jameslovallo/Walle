@@ -17,40 +17,19 @@ import kotlin.math.roundToInt
 object ImageCompressionHelper {
     private const val TAG = "ImageCompressionHelper"
 
-    /**
-     * Target resolution scale options:
-     * - "original": No compression/downscaling
-     * - "4k": Max dimensions 3840 x 2160 (or 2160 x 3840 for portrait)
-     * - "1080p": Max dimensions 1920 x 1080 (or 1080 x 1920 for portrait)
-     * - "device": Screen resolution dimensions
-     */
-    fun getTargetMaxDimensions(scale: String, context: Context): Pair<Int, Int>? {
-        return when (scale.lowercase()) {
-            "4k" -> Pair(3840, 2160)
-            "1080p" -> Pair(1920, 1080)
-            "device" -> {
-                val metrics = context.resources.displayMetrics
-                val w = metrics.widthPixels.coerceAtLeast(720)
-                val h = metrics.heightPixels.coerceAtLeast(1280)
-                Pair(max(w, h), minOf(w, h))
-            }
-            else -> null // "original" -> no downscaling
-        }
-    }
+    /** Maximum allowed dimensions for all images (4K). */
+    val MAX_4K_DIMS: Pair<Int, Int> = Pair(3840, 2160)
 
     /**
-     * Checks if a file exceeds target dimensions and compresses it using WebP (or high-efficiency JPEG fallback).
-     * Overwrites or replaces the target document file if compression is needed.
-     * Returns true if optimization was performed and saved.
+     * Optimizes an image file: caps dimensions at 4K max and encodes as WebP.
+     * Overwrites the target document file. Attempts to rename non-WebP files to .webp.
+     * Returns true if optimization was performed and saved successfully.
      */
     suspend fun optimizeDocumentFile(
         context: Context,
-        docFile: DocumentFile,
-        targetScale: String
+        docFile: DocumentFile
     ): Boolean = withContext(Dispatchers.IO) {
-        if (targetScale.equals("original", ignoreCase = true)) return@withContext false
-
-        val maxDims = getTargetMaxDimensions(targetScale, context) ?: return@withContext false
+        val maxDims = MAX_4K_DIMS
         val uri = docFile.uri
 
         try {
@@ -119,11 +98,23 @@ object ImageCompressionHelper {
             bos.close()
             finalBitmap.recycle()
 
-            // Write back to the document file if we saved size or downscaled
+            // Write back to the document file (always encoded as WebP, capped at 4K)
             if (compressedBytes.isNotEmpty()) {
                 context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
                     out.write(compressedBytes)
                     out.flush()
+                }
+                // Ensure the file has a .webp extension for clarity/correct format
+                try {
+                    val currentName = docFile.name
+                    if (currentName != null && !currentName.lowercase().endsWith(".webp")) {
+                        val base = currentName.substringBeforeLast('.')
+                        if (base.isNotBlank()) {
+                            docFile.renameTo("$base.webp")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Optimized ${docFile.name} but could not rename to .webp", e)
                 }
                 return@withContext true
             }

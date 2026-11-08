@@ -53,9 +53,10 @@ data class WallEUIState(
     val isScheduleEnabled: Boolean = true,
     val isSlideshowPaused: Boolean = false,
     val isFavoritesLoading: Boolean = false,
-    // Compression settings
-    val maxResolutionScale: String = "original", // "original", "4k", "1080p", "device"
-    val isCompressingWallpapers: Boolean = false
+    // Library optimization (always on by default: 4K max, WebP)
+    val optimizationOptimized: Int = 0,
+    val optimizationTotal: Int = 0,
+    val isOptimizingLibrary: Boolean = false
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -197,13 +198,22 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             performSearch(initialQuery)
         }
 
-        // Collect compression resolution scale preference
+        // Library optimization progress (always on by default: 4K max, WebP)
         viewModelScope.launch {
-            preferences.maxResolutionScaleFlow.collect { scale ->
-                _uiState.value = _uiState.value.copy(maxResolutionScale = scale)
-                if (!scale.equals("original", ignoreCase = true)) {
-                    compressWallpapersInBackground(scale)
-                }
+            repository.optimizationProgress.collect { progress ->
+                _uiState.value = _uiState.value.copy(
+                    optimizationOptimized = progress.optimized,
+                    optimizationTotal = progress.total,
+                    isOptimizingLibrary = progress.isRunning
+                )
+            }
+        }
+        // Refresh progress and start background optimization on launch
+        viewModelScope.launch {
+            repository.refreshOptimizationProgress()
+            val progress = repository.optimizationProgress.value
+            if (progress.total > progress.optimized) {
+                repository.compressUnoptimizedWallpapers()
             }
         }
     }
@@ -297,9 +307,14 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         performSearch()
     }
 
-    fun updateWallpaperOffset(id: String, offset: Float) {
+    /**
+     * Internal helper keeping the Discover grid in sync with the canonical offset.
+     * Grid views are read-only; the offset itself is only changed from Now Playing.
+     */
+    private fun syncDiscoverOffset(id: String, offset: Float) {
         val clamped = offset.coerceIn(0f, 1f)
         val currentList = _uiState.value.discoverWallpapers
+        if (currentList.none { it.id == id }) return
         val updatedList = currentList.map { wp ->
             if (wp.id == id) wp.copy(horizontalOffset = clamped) else wp
         }
@@ -307,33 +322,24 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Persists wallpaper horizontal offset to cache and preferences when dragging completes.
-     */
-    fun saveWallpaperOffset(id: String, offset: Float) {
-        val clamped = offset.coerceIn(0f, 1f)
-        updateWallpaperOffset(id, clamped)
-        viewModelScope.launch {
-            repository.setCachedOffset(id, clamped)
-            if (_uiState.value.currentWallpaper.id == id) {
-                preferences.updateCurrentWallpaperOffset(clamped)
-                repository.notifyWallpaperChanged()
-            }
-        }
-    }
-
-    /**
-     * Updates and saves current wallpaper offset (e.g. from modal preview dragging).
+     * Single canonical entry point for manual positioning updates.
+     * Called only from the Now Playing view drag handler. Persists to cache,
+     * Room (for favorites), and the live current-wallpaper preferences, then
+     * broadcasts so the home-screen live wallpaper redraws immediately.
+     * Also updates the Discover grid in memory so it never shows a stale offset.
      */
     fun updateCurrentWallpaperOffset(offset: Float) {
         val clamped = offset.coerceIn(0f, 1f)
         val current = _uiState.value.currentWallpaper
         if (current.id.isBlank()) return
+        val id = current.id
         _uiState.value = _uiState.value.copy(
             currentWallpaper = current.copy(horizontalOffset = clamped)
         )
+        syncDiscoverOffset(id, clamped)
         viewModelScope.launch {
-            repository.setCachedOffset(current.id, clamped)
-            repository.updateCropOffset(current.id, clamped)
+            repository.setCachedOffset(id, clamped)
+            repository.updateCropOffset(id, clamped)
             preferences.updateCurrentWallpaperOffset(clamped)
             repository.notifyWallpaperChanged()
         }
@@ -348,18 +354,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         val targetQuery = if (cleanId.isNotBlank()) "like:$cleanId" else "nature"
         _uiState.value = _uiState.value.copy(discoverQuery = targetQuery)
         performSearch(targetQuery)
-    }
-
-    fun updateFavoriteOffset(id: String, offset: Float) {
-        val clamped = offset.coerceIn(0f, 1f)
-        viewModelScope.launch {
-            repository.updateCropOffset(id, clamped)
-            repository.setCachedOffset(id, clamped)
-            if (_uiState.value.currentWallpaper.id == id) {
-                preferences.updateCurrentWallpaperOffset(clamped)
-                repository.notifyWallpaperChanged()
-            }
-        }
     }
 
     fun lazyDetectOffset(wallpaper: Wallpaper) {
@@ -441,24 +435,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(isLoading = true)
             repository.applyNextScheduledFavoriteWallpaper()
             _uiState.value = _uiState.value.copy(isLoading = false)
-        }
-    }
-
-    fun updateDragOffset(offset: Float) {
-        val clamped = offset.coerceIn(0f, 1f)
-        val current = _uiState.value.currentWallpaper
-        _uiState.value = _uiState.value.copy(
-            currentWallpaper = current.copy(horizontalOffset = clamped)
-        )
-    }
-
-    fun commitDragOffset(offset: Float) {
-        val clamped = offset.coerceIn(0f, 1f)
-        val current = _uiState.value.currentWallpaper
-        if (current.id.isBlank()) return
-        viewModelScope.launch {
-            repository.updateCropOffset(current.id, clamped)
-            repository.notifyWallpaperChanged()
         }
     }
 
@@ -563,6 +539,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             preferences.setLocalFolderUri(uri)
             if (uri.isNotBlank()) {
                 loadFavoritesFromFolder(uri)
+                startLibraryOptimization()
             }
         }
     }
@@ -596,24 +573,23 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setMaxResolutionScale(scale: String) {
+    /**
+     * Starts background library optimization (4K max, WebP) by default.
+     * Used when a new folder is selected or progress needs refreshing.
+     */
+    fun startLibraryOptimization() {
         viewModelScope.launch {
-            preferences.setMaxResolutionScale(scale)
-            if (!scale.equals("original", ignoreCase = true)) {
-                // Clear optimized list so images can be adapted to the new scale target
-                preferences.clearOptimizedWallpapers()
-                compressWallpapersInBackground(scale)
-            }
-        }
-    }
-
-    fun compressWallpapersInBackground(scale: String) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isCompressingWallpapers = true)
             try {
-                repository.compressUnoptimizedWallpapers(scale)
-            } finally {
-                _uiState.value = _uiState.value.copy(isCompressingWallpapers = false)
+                repository.refreshOptimizationProgress()
+                val progress = repository.optimizationProgress.value
+                if (progress.total > progress.optimized || progress.isRunning) {
+                    repository.compressUnoptimizedWallpapers()
+                } else {
+                    // No folder yet or already complete; still call so progress resets cleanly
+                    repository.compressUnoptimizedWallpapers()
+                }
+            } catch (e: Exception) {
+                // Optimizer already logs; UI progress will reflect last known state
             }
         }
     }
