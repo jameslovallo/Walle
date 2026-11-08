@@ -18,6 +18,7 @@ import com.example.data.model.Wallpaper
 import com.example.data.model.WallhavenImageItem
 import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -574,9 +575,20 @@ class WallpaperRepository(
             try {
                 val folderUri = Uri.parse(folderUriString)
                 val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
-                if (rootDoc == null || !rootDoc.exists() || !rootDoc.canWrite()) {
+                if (rootDoc == null || !rootDoc.exists()) {
+                    Log.w("WallpaperRepo", "Library folder not found: $folderUriString")
                     refreshOptimizationProgress()
+                    _optimizationProgress.value = _optimizationProgress.value.copy(isRunning = false)
                     return@withLock
+                }
+                // NOTE: DocumentFile.canWrite() is unreliable on external
+                // storage (e.g. /storage/emulated/0/Pictures/Walle) — it can
+                // report false even with a persisted read/write grant.
+                // Only warn here; each file's write outcome is the real
+                // signal. (If permission was lost, re-select the folder in
+                // Settings to restore read/write access.)
+                if (!rootDoc.canWrite()) {
+                    Log.w("WallpaperRepo", "Library folder reports canWrite=false; attempting anyway")
                 }
 
                 val optimizedIds = preferences.optimizedWallpaperIdsFlow.first().toMutableSet()
@@ -606,7 +618,9 @@ class WallpaperRepository(
                             docFile = item.file,
                             parentDir = item.parentDir
                         )
-                    } catch (e: Exception) {
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
                         Log.e("WallpaperRepo", "Error optimizing ${item.file.name}", e)
                         null
                     }
@@ -633,7 +647,9 @@ class WallpaperRepository(
                 // Update metadata index.json with optimized status
                 updateFolderMetadataIndex(rootDoc)
                 _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false)
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
                 Log.e("WallpaperRepo", "Error compressing unoptimized wallpapers", e)
                 refreshOptimizationProgress()
                 _optimizationProgress.value = _optimizationProgress.value.copy(isRunning = false)
