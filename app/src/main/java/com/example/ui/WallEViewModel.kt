@@ -52,14 +52,10 @@ data class WallEUIState(
     val localFolderUri: String = "",
     val isScheduleEnabled: Boolean = true,
     val isSlideshowPaused: Boolean = false,
-    val isFavoritesLoading: Boolean = true,
-    // App Update
-    val updateInfo: com.example.update.AppUpdateInfo = com.example.update.AppUpdateInfo(),
-    val isCheckingForUpdate: Boolean = false,
-    val isDownloadingUpdate: Boolean = false,
-    val downloadProgress: Float = 0f,
-    val updateError: String? = null,
-    val githubRepo: String = "lovallo/WallHeaven"
+    val isFavoritesLoading: Boolean = false,
+    // Compression settings
+    val maxResolutionScale: String = "original", // "original", "4k", "1080p", "device"
+    val isCompressingWallpapers: Boolean = false
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -201,16 +197,14 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             performSearch(initialQuery)
         }
 
-        // Collect repository preference for updates and run silent check
+        // Collect compression resolution scale preference
         viewModelScope.launch {
-            preferences.githubRepoFlow.collect { repo ->
-                _uiState.value = _uiState.value.copy(githubRepo = repo)
+            preferences.maxResolutionScaleFlow.collect { scale ->
+                _uiState.value = _uiState.value.copy(maxResolutionScale = scale)
+                if (!scale.equals("original", ignoreCase = true)) {
+                    compressWallpapersInBackground(scale)
+                }
             }
-        }
-
-        // Silent check for update on app startup
-        viewModelScope.launch {
-            checkForUpdate()
         }
     }
 
@@ -568,58 +562,53 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setGithubRepo(repo: String) {
+    fun skipForward() {
         viewModelScope.launch {
-            preferences.setGithubRepo(repo)
-            checkForUpdate()
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            repository.applyNextScheduledFavoriteWallpaper()
+            _uiState.value = _uiState.value.copy(isLoading = false)
         }
     }
 
-    fun checkForUpdate() {
+    fun skipBackward() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isCheckingForUpdate = true, updateError = null)
-            try {
-                val currentVersion = com.example.BuildConfig.VERSION_NAME
-                val repo = preferences.githubRepoFlow.first()
-                val info = com.example.update.AppUpdateManager.checkForUpdate(currentVersion, repo)
-                _uiState.value = _uiState.value.copy(
-                    updateInfo = info,
-                    isCheckingForUpdate = false
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isCheckingForUpdate = false,
-                    updateError = e.message
-                )
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            repository.applyPreviousScheduledFavoriteWallpaper()
+            _uiState.value = _uiState.value.copy(isLoading = false)
+        }
+    }
+
+    fun togglePlayPause() {
+        viewModelScope.launch {
+            val currentlyPaused = _uiState.value.isSlideshowPaused
+            preferences.setSlideshowPaused(!currentlyPaused)
+            if (!currentlyPaused) {
+                com.example.worker.WallpaperIntervalWorker.cancel(app)
+            } else {
+                val interval = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
+                com.example.worker.WallpaperIntervalWorker.scheduleNext(app, interval)
             }
         }
     }
 
-    fun downloadAndInstallUpdate(context: Context) {
-        val info = _uiState.value.updateInfo
-        if (!info.isUpdateAvailable || info.apkDownloadUrl.isBlank()) return
-
+    fun setMaxResolutionScale(scale: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isDownloadingUpdate = true,
-                downloadProgress = 0f,
-                updateError = null
-            )
-            val result = com.example.update.AppUpdateManager.downloadAndInstallApk(
-                context = context,
-                apkUrl = info.apkDownloadUrl,
-                fileName = info.apkFileName,
-                onProgress = { progress ->
-                    _uiState.value = _uiState.value.copy(downloadProgress = progress)
-                }
-            )
-            if (result.isFailure) {
-                _uiState.value = _uiState.value.copy(
-                    isDownloadingUpdate = false,
-                    updateError = result.exceptionOrNull()?.message ?: "Installation failed"
-                )
-            } else {
-                _uiState.value = _uiState.value.copy(isDownloadingUpdate = false)
+            preferences.setMaxResolutionScale(scale)
+            if (!scale.equals("original", ignoreCase = true)) {
+                // Clear optimized list so images can be adapted to the new scale target
+                preferences.clearOptimizedWallpapers()
+                compressWallpapersInBackground(scale)
+            }
+        }
+    }
+
+    fun compressWallpapersInBackground(scale: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isCompressingWallpapers = true)
+            try {
+                repository.compressUnoptimizedWallpapers(scale)
+            } finally {
+                _uiState.value = _uiState.value.copy(isCompressingWallpapers = false)
             }
         }
     }

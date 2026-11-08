@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,10 +27,16 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -82,11 +89,12 @@ enum class NavigationTab(val title: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WallEApp(
-    viewModel: WallEViewModel = viewModel()
+    viewModel: WallEViewModel = viewModel(),
+    initialOpenModal: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
-    var showCurrentFavoriteModal by rememberSaveable { mutableStateOf(false) }
+    var showCurrentFavoriteModal by rememberSaveable { mutableStateOf(initialOpenModal) }
 
     // Handle back button to return to home tab if on another tab
     if (selectedTabIndex != 0) {
@@ -182,21 +190,7 @@ fun WallEApp(
                             when (tab) {
                                 NavigationTab.DISCOVER -> Icon(Icons.Default.Explore, contentDescription = tab.title)
                                 NavigationTab.FAVORITES -> Icon(Icons.Default.Favorite, contentDescription = tab.title)
-                                NavigationTab.SETTINGS -> {
-                                    if (uiState.updateInfo.isUpdateAvailable) {
-                                        BadgedBox(
-                                            badge = {
-                                                Badge {
-                                                    // Red indicator badge
-                                                }
-                                            }
-                                        ) {
-                                            Icon(Icons.Default.Settings, contentDescription = tab.title)
-                                        }
-                                    } else {
-                                        Icon(Icons.Default.Settings, contentDescription = tab.title)
-                                    }
-                                }
+                                NavigationTab.SETTINGS -> Icon(Icons.Default.Settings, contentDescription = tab.title)
                             }
                         },
                         label = { Text(tab.title) },
@@ -240,8 +234,12 @@ fun WallEApp(
             CurrentFavoriteModalContent(
                 currentWallpaper = uiState.currentWallpaper,
                 isFavorite = uiState.isCurrentFavorite,
+                isPaused = uiState.isSlideshowPaused,
                 onDismiss = { showCurrentFavoriteModal = false },
                 onUnfavorite = { viewModel.toggleCurrentFavorite() },
+                onPlayPauseToggle = { viewModel.togglePlayPause() },
+                onSkipPrevious = { viewModel.skipBackward() },
+                onSkipNext = { viewModel.skipForward() },
                 onDragOffsetChanged = { newOffset ->
                     viewModel.updateCurrentWallpaperOffset(newOffset)
                 },
@@ -259,8 +257,12 @@ fun WallEApp(
 fun CurrentFavoriteModalContent(
     currentWallpaper: CurrentWallpaperInfo,
     isFavorite: Boolean,
+    isPaused: Boolean,
     onDismiss: () -> Unit,
     onUnfavorite: () -> Unit,
+    onPlayPauseToggle: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
     onDragOffsetChanged: (Float) -> Unit,
     onFindSimilar: (String) -> Unit
 ) {
@@ -290,13 +292,13 @@ fun CurrentFavoriteModalContent(
         ) {
             Column {
                 Text(
-                    text = "Selected Favorite",
+                    text = "Current Wallpaper",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Drag to reposition • Tap to find similar",
+                    text = "Home screen preview • Drag to reposition",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -309,111 +311,239 @@ fun CurrentFavoriteModalContent(
             }
         }
 
-        // Preview card frame
         val identifier = currentWallpaper.id.ifBlank {
             currentWallpaper.url.ifBlank { currentWallpaper.thumbUrl }
         }
 
+        // Preview card frame with home screen launcher overlay
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.72f)
+                .fillMaxWidth(0.70f)
                 .aspectRatio(deviceAspect)
-                .clip(RoundedCornerShape(22.dp))
+                .clip(RoundedCornerShape(26.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .testTag("modal_preview_card")
         ) {
-            val url = currentWallpaper.url.ifBlank { currentWallpaper.thumbUrl }
-            if (url.isNotBlank()) {
-                PositionedWallpaperImage(
-                    url = url,
-                    fallbackUrl = currentWallpaper.thumbUrl,
-                    horizontalOffset = localOffset,
-                    onTap = {
-                        if (identifier.isNotBlank()) {
-                            onFindSimilar(identifier)
-                        }
-                    },
-                    onDrag = { newOffset ->
-                        localOffset = newOffset
-                    },
-                    onDragEnd = {
-                        onDragOffsetChanged(localOffset)
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+            // Slide transition between wallpapers when skipped
+            AnimatedContent(
+                targetState = currentWallpaper,
+                transitionSpec = {
+                    slideInHorizontally(
+                        initialOffsetX = { fullWidth -> fullWidth },
+                        animationSpec = androidx.compose.animation.core.tween(durationMillis = 400)
+                    ) togetherWith slideOutHorizontally(
+                        targetOffsetX = { fullWidth -> -fullWidth },
+                        animationSpec = androidx.compose.animation.core.tween(durationMillis = 400)
+                    )
+                },
+                label = "wallpaper_slide_preview"
+            ) { targetWp ->
+                val url = targetWp.url.ifBlank { targetWp.thumbUrl }
+                if (url.isNotBlank()) {
+                    PositionedWallpaperImage(
+                        url = url,
+                        fallbackUrl = targetWp.thumbUrl,
+                        horizontalOffset = localOffset,
+                        onDrag = { newOffset ->
+                            localOffset = newOffset
+                        },
+                        onDragEnd = {
+                            onDragOffsetChanged(localOffset)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF1E1E24)))
+                }
             }
 
-            // Top hint banner: Tap to find similar
-            Surface(
-                color = Color.Black.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(12.dp),
+            // Realistic launcher UI mockup: Status bar, Clock, Search bar, and App Dock
+            Column(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 10.dp)
-                    .clickable {
-                        if (identifier.isNotBlank()) {
-                            onFindSimilar(identifier)
+                    .fillMaxSize()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Top: Status bar & Clock widget
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Status bar indicators
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "10:00",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.8f)))
+                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.8f)))
                         }
                     }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(14.dp)
+
+                    Spacer(modifier = Modifier.size(18.dp))
+
+                    // Big Clock widget
+                    Text(
+                        text = "10:00",
+                        style = MaterialTheme.typography.displayMedium,
+                        fontWeight = FontWeight.Light,
+                        color = Color.White.copy(alpha = 0.95f)
                     )
                     Text(
-                        text = "Tap to find similar",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
+                        text = "Sunday, Nov 8",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.85f),
                         fontWeight = FontWeight.Medium
                     )
                 }
-            }
 
-            // Bottom-Right: Unfavorite Button
-            IconButton(
-                onClick = onUnfavorite,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(10.dp)
-                    .size(42.dp)
-                    .background(
-                        if (isFavorite) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
-                        CircleShape
-                    )
-                    .testTag("modal_unfavorite_button"),
-                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-            ) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = if (isFavorite) "Unfavorite wallpaper" else "Favorite wallpaper",
-                    modifier = Modifier.size(22.dp)
-                )
+                // Bottom: Search Bar & App Dock
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Search pill
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.92f)
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(Color.White.copy(alpha = 0.28f)),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.8f)))
+                            Text("Search", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.9f))
+                        }
+                    }
+
+                    // App Dock (4 mock app icons)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(0.92f),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        repeat(4) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.35f))
+                            )
+                        }
+                    }
+                }
             }
         }
 
-        // Action button to find similar
-        Button(
-            onClick = {
-                if (identifier.isNotBlank()) {
-                    onFindSimilar(identifier)
-                }
-            },
-            shape = RoundedCornerShape(14.dp),
+        // Music player style control group below the image preview
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 2.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .testTag("modal_find_similar_button")
+                .padding(vertical = 4.dp)
+                .testTag("player_control_group")
         ) {
-            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Find Similar in Discover")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 1. Button to find similar images in Discover
+                IconButton(
+                    onClick = {
+                        if (identifier.isNotBlank()) {
+                            onFindSimilar(identifier)
+                        }
+                    },
+                    modifier = Modifier.testTag("player_find_similar_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Find Similar in Discover",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // 2. Skip Back button
+                IconButton(
+                    onClick = onSkipPrevious,
+                    modifier = Modifier.testTag("player_skip_back_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "Skip Back",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                // 3. Play / Pause button
+                IconButton(
+                    onClick = onPlayPauseToggle,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        .testTag("player_play_pause_button")
+                ) {
+                    Icon(
+                        imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = if (isPaused) "Play Slideshow" else "Pause Slideshow",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                // 4. Skip Forward button
+                IconButton(
+                    onClick = onSkipNext,
+                    modifier = Modifier.testTag("player_skip_forward_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "Skip Forward",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                // 5. Unfavorite button (Broken heart icon when favorited, heart when not)
+                IconButton(
+                    onClick = onUnfavorite,
+                    modifier = Modifier.testTag("player_unfavorite_button")
+                ) {
+                    if (isFavorite) {
+                        Icon(
+                            painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_favorite_broken),
+                            contentDescription = "Unfavorite Wallpaper",
+                            tint = Color(0xFFE53935),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorite Wallpaper",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }

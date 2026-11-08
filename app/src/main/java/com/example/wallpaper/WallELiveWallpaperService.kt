@@ -51,6 +51,13 @@ class WallELiveWallpaperService : WallpaperService() {
         private var isNsfwMode: Boolean = false
         private var activeFilters: ModeFilterSettings = ModeFilterSettings()
 
+        // Slide transition state when wallpaper changes
+        private var previousBitmap: Bitmap? = null
+        private var previousOffset: Float = 0.5f
+        private var slideAnimStartTime = 0L
+        private var isSlideAnimating = false
+        private val slideAnimDuration = 600L // Under 750ms as requested
+
         // Double tap & long press gesture detection state
         private var lastTapTime = 0L
         private var lastTapX = 0f
@@ -67,7 +74,7 @@ class WallELiveWallpaperService : WallpaperService() {
             handleLongPress(touchDownX, touchDownY)
         }
 
-        // Action feedback animation state (Skip, Pause, Resume)
+        // Action feedback animation state (Skip)
         private var feedbackAnimStartTime = 0L
         private var feedbackAnimX = 0f
         private var feedbackAnimY = 0f
@@ -77,13 +84,31 @@ class WallELiveWallpaperService : WallpaperService() {
         private val animHandler = Handler(Looper.getMainLooper())
         private val animRunnable = object : Runnable {
             override fun run() {
-                if (!isFeedbackAnimating) return
-                val elapsed = SystemClock.uptimeMillis() - feedbackAnimStartTime
-                if (elapsed >= feedbackAnimDuration) {
-                    isFeedbackAnimating = false
-                    drawFrame()
-                } else {
-                    drawFrame()
+                var shouldContinue = false
+                val now = SystemClock.uptimeMillis()
+
+                if (isSlideAnimating) {
+                    val elapsed = now - slideAnimStartTime
+                    if (elapsed >= slideAnimDuration) {
+                        isSlideAnimating = false
+                        previousBitmap = null
+                    } else {
+                        shouldContinue = true
+                    }
+                }
+
+                if (isFeedbackAnimating) {
+                    val elapsed = now - feedbackAnimStartTime
+                    if (elapsed >= feedbackAnimDuration) {
+                        isFeedbackAnimating = false
+                    } else {
+                        shouldContinue = true
+                    }
+                }
+
+                drawFrame()
+
+                if (shouldContinue) {
                     animHandler.postDelayed(this, 16)
                 }
             }
@@ -112,6 +137,7 @@ class WallELiveWallpaperService : WallpaperService() {
         override fun onDestroy() {
             super.onDestroy()
             isFeedbackAnimating = false
+            isSlideAnimating = false
             animHandler.removeCallbacks(animRunnable)
             animHandler.removeCallbacks(longPressRunnable)
             try {
@@ -160,8 +186,7 @@ class WallELiveWallpaperService : WallpaperService() {
             }
             serviceScope.launch {
                 preferences.currentWallpaperFlow.collect { info ->
-                    currentInfo = info
-                    loadBitmap(info.url)
+                    loadAndTransitionToWallpaper(info)
                 }
             }
         }
@@ -172,32 +197,61 @@ class WallELiveWallpaperService : WallpaperService() {
                 val nsfw = preferences.isNsfwModeFlow.first()
                 isNsfwMode = nsfw
                 activeFilters = if (nsfw) preferences.nsfwFilterFlow.first() else preferences.sfwFilterFlow.first()
-                currentInfo = info
-                loadBitmap(info.url)
+                loadAndTransitionToWallpaper(info)
             }
         }
 
-        private fun loadBitmap(url: String) {
-            if (url.isBlank()) {
+        private fun loadAndTransitionToWallpaper(newInfo: CurrentWallpaperInfo) {
+            if (newInfo.url.isBlank()) {
                 drawFrame()
                 return
             }
+
+            // If same wallpaper and same offset, don't re-animate
+            if (currentInfo?.id == newInfo.id && currentInfo?.url == newInfo.url && currentInfo?.horizontalOffset == newInfo.horizontalOffset && currentBitmap != null) {
+                return
+            }
+
+            // If only offset changed on the same image, update directly without reload
+            if (currentInfo?.id == newInfo.id && currentBitmap != null) {
+                currentInfo = newInfo
+                drawFrame()
+                return
+            }
+
             serviceScope.launch {
                 try {
+                    // Pre-load the next image completely into memory before changing the position offset or image
                     val request = ImageRequest.Builder(this@WallELiveWallpaperService)
-                        .data(url)
+                        .data(newInfo.url)
                         .size(coil.size.Size.ORIGINAL)
                         .precision(coil.size.Precision.EXACT)
                         .allowHardware(false)
                         .build()
                     val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
-                    val bmp = (result as? BitmapDrawable)?.bitmap
-                    if (bmp != null) {
-                        currentBitmap = bmp
-                        drawFrame()
+                    val nextBmp = (result as? BitmapDrawable)?.bitmap
+
+                    if (nextBmp != null) {
+                        withContext(Dispatchers.Main) {
+                            if (currentBitmap != null) {
+                                // Slide transition: old image slides left, new image slides in from the right
+                                previousBitmap = currentBitmap
+                                previousOffset = currentInfo?.horizontalOffset ?: 0.5f
+                                currentBitmap = nextBmp
+                                currentInfo = newInfo
+                                slideAnimStartTime = SystemClock.uptimeMillis()
+                                isSlideAnimating = true
+                                animHandler.removeCallbacks(animRunnable)
+                                animHandler.post(animRunnable)
+                            } else {
+                                currentBitmap = nextBmp
+                                currentInfo = newInfo
+                                drawFrame()
+                            }
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.e("WallELiveWallpaper", "Failed to load bitmap: $url", e)
+                    Log.e("WallELiveWallpaper", "Failed to preload bitmap: ${newInfo.url}", e)
                 }
             }
         }
@@ -270,33 +324,19 @@ class WallELiveWallpaperService : WallpaperService() {
             }
         }
 
+        /**
+         * Holding an empty space opens the app and moves directly to the current image / now playing view.
+         * The pause/play interaction on hold is removed as requested.
+         */
         private fun handleLongPress(x: Float, y: Float) {
-            serviceScope.launch {
-                val wasPaused = preferences.isSlideshowPausedFlow.first()
-                val nowPaused = !wasPaused
-                preferences.setSlideshowPaused(nowPaused)
-
-                if (nowPaused) {
-                    WallpaperIntervalWorker.cancel(this@WallELiveWallpaperService)
-                } else {
-                    val interval = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
-                    WallpaperIntervalWorker.scheduleNext(this@WallELiveWallpaperService, interval)
+            try {
+                val launchIntent = Intent(this@WallELiveWallpaperService, com.example.MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    putExtra("open_now_playing", true)
                 }
-
-                // Show Pause or Resume feedback icon
-                withContext(Dispatchers.Main) {
-                    feedbackIconType = if (nowPaused) {
-                        WallpaperRenderHelper.FeedbackIconType.PAUSE
-                    } else {
-                        WallpaperRenderHelper.FeedbackIconType.RESUME
-                    }
-                    feedbackAnimX = x
-                    feedbackAnimY = y
-                    feedbackAnimStartTime = SystemClock.uptimeMillis()
-                    isFeedbackAnimating = true
-                    animHandler.removeCallbacks(animRunnable)
-                    animHandler.post(animRunnable)
-                }
+                startActivity(launchIntent)
+            } catch (e: Exception) {
+                Log.e("WallELiveWallpaper", "Error launching app from long press", e)
             }
         }
 
@@ -313,20 +353,37 @@ class WallELiveWallpaperService : WallpaperService() {
                     val bmp = currentBitmap
                     if (bmp != null) {
                         val offset = currentInfo?.horizontalOffset ?: 0.5f
-                        WallpaperRenderHelper.renderWallpaperToCanvas(
-                            canvas = canvas,
-                            bitmap = bmp,
-                            screenWidth = width,
-                            screenHeight = height,
-                            horizontalOffset = offset,
-                            filters = activeFilters
-                        )
+
+                        if (isSlideAnimating) {
+                            val elapsed = SystemClock.uptimeMillis() - slideAnimStartTime
+                            val progress = (elapsed.toFloat() / slideAnimDuration.toFloat()).coerceIn(0f, 1f)
+                            WallpaperRenderHelper.renderWallpaperSlideTransitionToCanvas(
+                                canvas = canvas,
+                                oldBitmap = previousBitmap,
+                                oldOffset = previousOffset,
+                                newBitmap = bmp,
+                                newOffset = offset,
+                                screenWidth = width,
+                                screenHeight = height,
+                                progress = progress,
+                                filters = activeFilters
+                            )
+                        } else {
+                            WallpaperRenderHelper.renderWallpaperToCanvas(
+                                canvas = canvas,
+                                bitmap = bmp,
+                                screenWidth = width,
+                                screenHeight = height,
+                                horizontalOffset = offset,
+                                filters = activeFilters
+                            )
+                        }
                     } else {
                         // Minimalist background if no wallpaper yet
                         canvas.drawColor(Color.parseColor("#121316"))
                     }
 
-                    // Render action feedback animation (Skip, Pause, Resume) if active
+                    // Render action feedback animation (Skip) if active
                     if (isFeedbackAnimating) {
                         val elapsed = SystemClock.uptimeMillis() - feedbackAnimStartTime
                         val progress = (elapsed.toFloat() / feedbackAnimDuration.toFloat()).coerceIn(0f, 1f)

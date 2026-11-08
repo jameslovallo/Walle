@@ -1,6 +1,8 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -8,6 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrokenImage
+import androidx.compose.ui.input.pointer.positionChange
+import kotlin.math.abs
+import kotlin.math.atan2
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -78,17 +83,53 @@ fun PositionedWallpaperImage(
             .then(
                 if (onDragEnd != null || onDrag != null) {
                     Modifier.pointerInput(activeUrl) {
-                        detectHorizontalDragGestures(
-                            onHorizontalDrag = { change, dragAmount ->
-                                change.consume()
-                                val delta = dragAmount / 320f
-                                localOffset = (localOffset - delta).coerceIn(0f, 1f)
-                                onDrag?.invoke(localOffset)
-                            },
-                            onDragEnd = {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var totalDx = 0f
+                            var totalDy = 0f
+                            var isLockedHorizontal: Boolean? = null
+
+                            do {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+
+                                if (change.pressed) {
+                                    val dragDelta = change.positionChange()
+                                    totalDx += dragDelta.x
+                                    totalDy += dragDelta.y
+
+                                    if (isLockedHorizontal == null) {
+                                        val dist = Math.hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
+                                        val touchSlop = viewConfiguration.touchSlop
+                                        if (dist > touchSlop) {
+                                            // Angle from horizontal in degrees: 0 deg is pure horizontal, 90 deg is pure vertical
+                                            val angleRad = atan2(abs(totalDy).toDouble(), abs(totalDx).toDouble())
+                                            val angleDeg = Math.toDegrees(angleRad)
+                                            // Strictly horizontal motion, with 30 degrees of tolerance away from horizontal
+                                            if (angleDeg <= 30.0) {
+                                                isLockedHorizontal = true
+                                                change.consume()
+                                                val delta = totalDx / 320f
+                                                localOffset = (localOffset - delta).coerceIn(0f, 1f)
+                                                onDrag?.invoke(localOffset)
+                                            } else {
+                                                // Vertical motion: yield to parent LazyVerticalGrid
+                                                isLockedHorizontal = false
+                                            }
+                                        }
+                                    } else if (isLockedHorizontal == true) {
+                                        change.consume()
+                                        val delta = dragDelta.x / 320f
+                                        localOffset = (localOffset - delta).coerceIn(0f, 1f)
+                                        onDrag?.invoke(localOffset)
+                                    }
+                                }
+                            } while (event.changes.any { it.pressed })
+
+                            if (isLockedHorizontal == true) {
                                 onDragEnd?.invoke(localOffset)
                             }
-                        )
+                        }
                     }
                 } else Modifier
             ),

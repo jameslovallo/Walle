@@ -366,11 +366,13 @@ class WallpaperRepository(
             }
 
             val current = preferences.currentWallpaperFlow.first()
-            val candidate = if (favorites.size > 1) {
-                favorites.filter { it.id != current.id }.randomOrNull() ?: favorites.random()
+            val currentIndex = favorites.indexOfFirst { it.id == current.id }
+            val nextIndex = if (currentIndex != -1) {
+                (currentIndex + 1) % favorites.size
             } else {
-                favorites.first()
+                0
             }
+            val candidate = favorites[nextIndex]
 
             applyFavorite(candidate)
 
@@ -395,6 +397,107 @@ class WallpaperRepository(
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error applying next scheduled favorite", e)
             Result.failure(e)
+        }
+    }
+
+    /**
+     * Applies previous favorite wallpaper (skip back).
+     */
+    suspend fun applyPreviousScheduledFavoriteWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
+        try {
+            val isNsfw = preferences.isNsfwModeFlow.first()
+            val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
+            val favorites = favoriteDao.getFavoritesByPuritiesDirect(purities)
+            if (favorites.isEmpty()) {
+                return@withContext Result.failure(Exception("No favorites saved to cycle through"))
+            }
+
+            val current = preferences.currentWallpaperFlow.first()
+            val currentIndex = favorites.indexOfFirst { it.id == current.id }
+            val prevIndex = if (currentIndex != -1) {
+                (currentIndex - 1 + favorites.size) % favorites.size
+            } else {
+                favorites.size - 1
+            }
+            val candidate = favorites[prevIndex]
+
+            applyFavorite(candidate)
+
+            val favTags = if (candidate.tags.isNotBlank()) {
+                candidate.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
+            } else {
+                emptyList()
+            }
+
+            val wp = Wallpaper(
+                id = candidate.id,
+                fullUrl = candidate.url,
+                thumbUrl = candidate.thumbUrl,
+                purity = candidate.purity,
+                category = candidate.category,
+                resolution = candidate.resolution,
+                horizontalOffset = candidate.horizontalOffset,
+                isFavorite = true,
+                tags = favTags
+            )
+            Result.success(wp)
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error applying previous scheduled favorite", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Runs in the background to compress and optimize saved favorites according to the selected max resolution scale.
+     * Records optimized status in index.json and AppPreferences.
+     */
+    suspend fun compressUnoptimizedWallpapers(targetScale: String) = withContext(Dispatchers.IO) {
+        if (targetScale.equals("original", ignoreCase = true)) return@withContext
+
+        val folderUriString = preferences.localFolderUriFlow.first()
+        if (folderUriString.isBlank()) return@withContext
+
+        try {
+            val folderUri = Uri.parse(folderUriString)
+            val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext
+            if (!rootDoc.exists() || !rootDoc.canWrite()) return@withContext
+
+            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first().toMutableSet()
+
+            // Find all image files in sfw and nsfw subfolders
+            val subfolders = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
+            for (subDir in subfolders) {
+                if (!subDir.exists() || !subDir.isDirectory) continue
+                for (file in subDir.listFiles()) {
+                    if (file.isDirectory) continue
+                    val name = file.name ?: continue
+                    if (name.equals("index.json", ignoreCase = true)) continue
+                    val lower = name.lowercase()
+                    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp")) {
+                        val baseId = name.substringBeforeLast('.')
+                        val id = if (baseId.startsWith("wallhaven-", ignoreCase = true)) {
+                            baseId.substringAfter("wallhaven-")
+                        } else {
+                            baseId
+                        }
+
+                        if (!optimizedIds.contains(id)) {
+                            val didOptimize = com.example.util.ImageCompressionHelper.optimizeDocumentFile(
+                                context = context,
+                                docFile = file,
+                                targetScale = targetScale
+                            )
+                            optimizedIds.add(id)
+                            preferences.markWallpaperOptimized(id)
+                        }
+                    }
+                }
+            }
+
+            // Update metadata index.json with optimized status
+            updateFolderMetadataIndex(rootDoc)
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error compressing unoptimized wallpapers", e)
         }
     }
 
@@ -1143,6 +1246,7 @@ class WallpaperRepository(
             }
 
             val allFavs = favoriteDao.getAllFavoriteIds()
+            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
             val jsonArray = JSONArray()
             for (id in allFavs) {
                 val fav = favoriteDao.getFavoriteById(id) ?: continue
@@ -1155,6 +1259,7 @@ class WallpaperRepository(
                     }
                     put("url", fav.url)
                     put("timestamp", fav.addedTimestamp)
+                    put("optimized", optimizedIds.contains(fav.id))
                 }
                 jsonArray.put(itemObj)
             }

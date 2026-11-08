@@ -104,6 +104,55 @@ object WallpaperRenderHelper {
         }
     }
 
+    /**
+     * Renders a slide transition where the new image slides in from the right over/alongside the old image.
+     * progress: 0f (start) to 1f (complete).
+     */
+    fun renderWallpaperSlideTransitionToCanvas(
+        canvas: Canvas,
+        oldBitmap: Bitmap?,
+        oldOffset: Float,
+        newBitmap: Bitmap,
+        newOffset: Float,
+        screenWidth: Int,
+        screenHeight: Int,
+        progress: Float,
+        filters: ModeFilterSettings
+    ) {
+        if (screenWidth <= 0 || screenHeight <= 0) return
+        val clampedProgress = progress.coerceIn(0f, 1f)
+
+        // Draw old wallpaper translating left: x = -progress * screenWidth
+        if (oldBitmap != null && clampedProgress < 1f) {
+            canvas.save()
+            canvas.translate(-clampedProgress * screenWidth, 0f)
+            renderWallpaperToCanvas(
+                canvas = canvas,
+                bitmap = oldBitmap,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                horizontalOffset = oldOffset,
+                filters = filters
+            )
+            canvas.restore()
+        } else if (oldBitmap == null) {
+            canvas.drawColor(Color.BLACK)
+        }
+
+        // Draw new wallpaper sliding in from the right: x = (1.0f - progress) * screenWidth
+        canvas.save()
+        canvas.translate((1.0f - clampedProgress) * screenWidth, 0f)
+        renderWallpaperToCanvas(
+            canvas = canvas,
+            bitmap = newBitmap,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            horizontalOffset = newOffset,
+            filters = filters
+        )
+        canvas.restore()
+    }
+
     enum class FeedbackIconType {
         SKIP,
         PAUSE,

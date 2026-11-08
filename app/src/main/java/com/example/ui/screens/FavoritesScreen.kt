@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -104,6 +105,9 @@ fun FavoritesScreen(
                         favorite = fav,
                         onDeleteClick = { viewModel.deleteFavorite(fav.id) },
                         onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
+                        onFindSimilar = {
+                            viewModel.searchSimilar(fav.id)
+                        },
                         onDragEnd = { newOffset ->
                             viewModel.updateFavoriteOffset(fav.id, newOffset)
                         }
@@ -119,6 +123,7 @@ fun FavoriteCard(
     favorite: FavoriteWallpaper,
     onDeleteClick: () -> Unit,
     onItemClick: () -> Unit,
+    onFindSimilar: () -> Unit,
     onDragEnd: (Float) -> Unit
 ) {
     val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
@@ -154,7 +159,25 @@ fun FavoriteCard(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Hovering Bottom-Right: Remove favorite (broken heart)
+        // Bottom-Left: Find similar in Discover
+        IconButton(
+            onClick = onFindSimilar,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(8.dp)
+                .size(40.dp)
+                .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                .testTag("fav_find_similar_${favorite.id}"),
+            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = "Find Similar in Discover",
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        // Bottom-Right: Remove favorite (broken heart icon)
         IconButton(
             onClick = onDeleteClick,
             modifier = Modifier

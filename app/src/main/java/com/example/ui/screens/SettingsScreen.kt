@@ -24,17 +24,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Compress
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -47,6 +45,9 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -118,143 +119,6 @@ fun SettingsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // App Update Banner / Card (at the very top of Settings)
-        val updateInfo = uiState.updateInfo
-        Card(
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (updateInfo.isUpdateAvailable) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainerLow
-                }
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("section_app_update")
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (updateInfo.isUpdateAvailable) Icons.Default.SystemUpdate else Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = if (updateInfo.isUpdateAvailable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
-                        )
-                        Column {
-                            Text(
-                                text = if (updateInfo.isUpdateAvailable) "Update Available" else "Application Updates",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = if (updateInfo.isUpdateAvailable) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Current version: v${com.example.BuildConfig.VERSION_NAME}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (updateInfo.isUpdateAvailable) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    if (uiState.isCheckingForUpdate) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        androidx.compose.material3.IconButton(
-                            onClick = { viewModel.checkForUpdate() },
-                            modifier = Modifier.testTag("check_update_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Check for update",
-                                tint = if (updateInfo.isUpdateAvailable) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                if (updateInfo.isUpdateAvailable) {
-                    Text(
-                        text = "A new release (${updateInfo.latestVersion}) is ready to install.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    if (updateInfo.releaseNotes.isNotBlank()) {
-                        Text(
-                            text = updateInfo.releaseNotes,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
-                            maxLines = 3
-                        )
-                    }
-
-                    if (uiState.isDownloadingUpdate) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            LinearProgressIndicator(
-                                progress = { uiState.downloadProgress },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Text(
-                                text = "Downloading update: ${(uiState.downloadProgress * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    } else {
-                        Button(
-                            onClick = { viewModel.downloadAndInstallUpdate(context) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .testTag("install_update_button"),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            )
-                        ) {
-                            Icon(Icons.Default.SystemUpdate, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Install Update (${updateInfo.latestVersion})")
-                        }
-                    }
-                } else {
-                    Text(
-                        text = "You are on the latest release (${uiState.updateInfo.latestVersion.ifBlank { "v" + com.example.BuildConfig.VERSION_NAME }}).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (uiState.updateError != null) {
-                    Text(
-                        text = "Update error: ${uiState.updateError}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-        }
-
         // Section 1: Live Wallpaper
         Card(
             shape = RoundedCornerShape(20.dp),
@@ -647,6 +511,85 @@ fun SettingsScreen(
                     Text(
                         if (uiState.localFolderUri.isNotBlank()) "Save Folder Selected" else "Select Save Folder"
                     )
+                }
+
+                // Image Compression Controls (Below folder selection)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Compress,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Max Resolution & Compression",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        if (uiState.isCompressingWallpapers) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Downscale images to the target resolution and compress with high efficiency WebP format in the background.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    val resolutionOptions = listOf(
+                        "original" to "Original",
+                        "4k" to "4K",
+                        "1080p" to "1080p",
+                        "device" to "Device"
+                    )
+
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("compression_resolution_scale_row")
+                    ) {
+                        resolutionOptions.forEachIndexed { index, (scaleKey, scaleLabel) ->
+                            val isSelected = uiState.maxResolutionScale.equals(scaleKey, ignoreCase = true)
+                            SegmentedButton(
+                                selected = isSelected,
+                                onClick = {
+                                    viewModel.setMaxResolutionScale(scaleKey)
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = resolutionOptions.size
+                                ),
+                                label = {
+                                    Text(
+                                        text = scaleLabel,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            )
+                        }
+                    }
                 }
 
                 // Wallhaven API Key input

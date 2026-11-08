@@ -18,10 +18,16 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    val openNowPlaying = intent?.getBooleanExtra("open_now_playing", false) ?: false
     setContent {
       MyApplicationTheme {
-        WallEApp()
+        WallEApp(initialOpenModal = openNowPlaying)
       }
     }
+  }
+
+  override fun onNewIntent(intent: android.content.Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
   }
 }

@@ -43,6 +43,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -178,6 +180,9 @@ fun DiscoverScreen(
                             },
                             onToggleFavorite = {
                                 viewModel.toggleFavoriteWallpaper(wallpaper)
+                            },
+                            onFindSimilar = {
+                                viewModel.searchSimilar(wallpaper.id)
                             },
                             onCardClick = {
                                 viewModel.applyWallpaperAsCurrent(wallpaper)
@@ -416,6 +421,7 @@ fun DiscoverWallpaperCard(
     wallpaper: Wallpaper,
     onDragOffset: (Float) -> Unit,
     onToggleFavorite: () -> Unit,
+    onFindSimilar: () -> Unit,
     onCardClick: () -> Unit,
     onAppear: () -> Unit
 ) {
@@ -457,7 +463,25 @@ fun DiscoverWallpaperCard(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Hovering Bottom-Right: Favorite Heart Button (explicit action)
+        // Bottom-Left: Find similar images in Discover
+        IconButton(
+            onClick = onFindSimilar,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(8.dp)
+                .size(40.dp)
+                .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                .testTag("discover_find_similar_${wallpaper.id}"),
+            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = "Find Similar in Discover",
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        // Bottom-Right: Favorite Button (Broken heart if favorited, heart if not)
         val isFav = wallpaper.isFavorite
         IconButton(
             onClick = onToggleFavorite,
@@ -472,11 +496,19 @@ fun DiscoverWallpaperCard(
                 .testTag("fav_button_${wallpaper.id}"),
             colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
         ) {
-            Icon(
-                imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                contentDescription = if (isFav) "Remove Favorite" else "Add Favorite",
-                modifier = Modifier.size(20.dp)
-            )
+            if (isFav) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_favorite_broken),
+                    contentDescription = "Remove Favorite",
+                    modifier = Modifier.size(20.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Favorite,
+                    contentDescription = "Add Favorite",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }

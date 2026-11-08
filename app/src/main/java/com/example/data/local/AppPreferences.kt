@@ -62,6 +62,17 @@ class AppPreferences(private val context: Context) {
         val KEY_IS_SCHEDULE_ENABLED = booleanPreferencesKey("is_schedule_enabled")
         val KEY_IS_SLIDESHOW_PAUSED = booleanPreferencesKey("is_slideshow_paused")
         val KEY_GITHUB_REPO = stringPreferencesKey("github_repo")
+        // Compression resolution scale: "original", "4k", "1080p", "device"
+        val KEY_MAX_RESOLUTION_SCALE = stringPreferencesKey("max_resolution_scale")
+        val KEY_OPTIMIZED_WALLPAPER_IDS = stringSetPreferencesKey("optimized_wallpaper_ids")
+    }
+
+    val maxResolutionScaleFlow: Flow<String> = context.dataStore.data.map {
+        it[KEY_MAX_RESOLUTION_SCALE] ?: "original"
+    }
+
+    val optimizedWallpaperIdsFlow: Flow<Set<String>> = context.dataStore.data.map {
+        it[KEY_OPTIMIZED_WALLPAPER_IDS] ?: emptySet()
     }
 
     val githubRepoFlow: Flow<String> = context.dataStore.data.map {
@@ -293,6 +304,26 @@ class AppPreferences(private val context: Context) {
     suspend fun setGithubRepo(repo: String) {
         context.dataStore.edit {
             it[KEY_GITHUB_REPO] = repo
+        }
+    }
+
+    suspend fun setMaxResolutionScale(scale: String) {
+        context.dataStore.edit {
+            it[KEY_MAX_RESOLUTION_SCALE] = scale
+        }
+    }
+
+    suspend fun markWallpaperOptimized(id: String) {
+        if (id.isBlank()) return
+        context.dataStore.edit {
+            val current = it[KEY_OPTIMIZED_WALLPAPER_IDS] ?: emptySet()
+            it[KEY_OPTIMIZED_WALLPAPER_IDS] = current + id
+        }
+    }
+
+    suspend fun clearOptimizedWallpapers() {
+        context.dataStore.edit {
+            it[KEY_OPTIMIZED_WALLPAPER_IDS] = emptySet()
         }
     }
 }
