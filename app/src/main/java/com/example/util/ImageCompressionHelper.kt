@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
@@ -22,6 +23,29 @@ object ImageCompressionHelper {
     /** Last failure reason (for UI diagnostics when progress is stuck). */
     @Volatile
     var lastFailureReason: String = ""
+
+    /**
+     * Opens an input stream for [uri] with retries. External-storage
+     * providers intermittently return null on first access, especially
+     * right after a folder was granted or files were copied in.
+     */
+    private suspend fun openInputStreamWithRetry(context: Context, uri: Uri): java.io.InputStream? {
+        var last: Exception? = null
+        repeat(3) { attempt ->
+            try {
+                val stream = context.contentResolver.openInputStream(uri)
+                if (stream != null) return stream
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                last = e
+                Log.w(TAG, "openInputStream attempt ${attempt + 1} for $uri failed: ${e.message}")
+            }
+            if (attempt < 2) delay(200L * (attempt + 1))
+        }
+        Log.w(TAG, "openInputStream retries exhausted for $uri: $last")
+        return null
+    }
 
     /**
      * Optimizes an image file: caps dimensions at 4K max and encodes as WebP.
@@ -52,11 +76,11 @@ object ImageCompressionHelper {
         try {
             // First decode bounds only
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use { stream ->
+            openInputStreamWithRetry(context, uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, options)
             } ?: run {
                 Log.w(TAG, "Cannot open source for $sourceName")
-                lastFailureReason = "Cannot open source $sourceName (read permission?)"
+                lastFailureReason = "Cannot open source $sourceName (read permission? Re-select the folder in Settings — pick Same Folder again to grant read/write access.)"
                 return@withContext null
             }
 
@@ -91,7 +115,7 @@ object ImageCompressionHelper {
             }
 
             val decodedBitmap = try {
-                context.contentResolver.openInputStream(uri)?.use { stream ->
+                openInputStreamWithRetry(context, uri)?.use { stream ->
                     BitmapFactory.decodeStream(stream, null, decodeOptions)
                 }
             } catch (e: OutOfMemoryError) {

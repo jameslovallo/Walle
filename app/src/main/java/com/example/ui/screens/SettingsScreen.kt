@@ -96,20 +96,29 @@ fun SettingsScreen(
 
     var intervalExpanded by remember { mutableStateOf(false) }
 
-    // Folder picker launcher
+    // Folder picker launcher. The stock OpenDocumentTree contract only
+    // grants READ, so requesting WRITE persistable access silently throws
+    // and leaves nothing persisted (conversions then fail with
+    // "Cannot open source" after restart). Launch the tree intent
+    // directly with READ + WRITE + PERSISTABLE so both grant and persist
+    // succeed, giving the optimizer read/write access to the folder.
     val folderPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            } catch (e: Exception) {
-                // Ignore
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val uri = result.data?.data
+            if (uri != null) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    android.util.Log.d("SettingsScreen", "Persisted read/write grant for $uri")
+                } catch (e: Exception) {
+                    android.util.Log.e("SettingsScreen", "takePersistableUriPermission failed for $uri", e)
+                }
+                viewModel.setLocalFolderUri(uri.toString())
             }
-            viewModel.setLocalFolderUri(uri.toString())
         }
     }
 
@@ -500,7 +509,17 @@ fun SettingsScreen(
 
                 // Local User Folder Picker (Moved above API Key)
                 OutlinedButton(
-                    onClick = { folderPickerLauncher.launch(null) },
+                    onClick = {
+                        val pickerIntent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                            addFlags(
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                            )
+                        }
+                        folderPickerLauncher.launch(pickerIntent)
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp)
