@@ -524,6 +524,83 @@ class WallpaperRepository(
         return hasWebPMagic(file)
     }
 
+    /** Converts a SAF tree URI (e.g. primary:Pictures/Walle) to a plain File path. */
+    private fun treeUriToFile(folderUriString: String): File? {
+        return try {
+            val treeUri = Uri.parse(folderUriString)
+            // e.g. "primary:Pictures/Walle"
+            val treeId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val parts = treeId.split(":", limit = 2)
+            val volume = parts.getOrNull(0) ?: return null
+            val relPath = parts.getOrNull(1)?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: ""
+            val base = when (volume.lowercase()) {
+                "primary" -> "/storage/emulated/0"
+                else -> "/storage/$volume"
+            }
+            val file = File(base, relPath)
+            if (file.exists() && file.isDirectory) file else null
+        } catch (e: Exception) {
+            Log.w("WallpaperRepo", "treeUriToFile failed for $folderUriString", e)
+            null
+        }
+    }
+
+    private fun isAllFilesAccessGranted(): Boolean {
+        return try {
+            android.os.Build.VERSION.SDK_INT < 30 || android.os.Environment.isExternalStorageManager()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** File-based library collection (requires all-files access). */
+    private fun collectLibraryFilesViaFile(rootFile: File, maxDepth: Int = 3): List<Triple<File, String, File>> {
+        val out = mutableListOf<Triple<File, String, File>>()
+        fun walk(dir: File, depth: Int) {
+            val entries = try {
+                dir.listFiles() ?: return
+            } catch (e: Exception) {
+                Log.w("WallpaperRepo", "Could not list file dir ${dir.absolutePath}", e)
+                return
+            }
+            for (entry in entries) {
+                if (entry.isDirectory) {
+                    if (depth < maxDepth) walk(entry, depth + 1)
+                } else {
+                    val name = entry.name ?: continue
+                    if (name.equals("index.json", ignoreCase = true)) continue
+                    val id = imageIdFromFileName(name) ?: continue
+                    out.add(Triple(entry, id, dir))
+                }
+            }
+        }
+        walk(rootFile, 0)
+        return out
+    }
+
+    private fun isFileOptimizedViaFile(file: File, id: String, optimizedIds: Set<String>): Boolean {
+        if (id !in optimizedIds) return false
+        if (file.name.lowercase().endsWith(".webp")) return true
+        return try {
+            java.io.FileInputStream(file).use { input ->
+                val header = ByteArray(12)
+                var read = 0
+                while (read < header.size) {
+                    val n = input.read(header, read, header.size - read)
+                    if (n <= 0) break
+                    read += n
+                }
+                read >= 12 &&
+                    header[0] == 'R'.code.toByte() && header[1] == 'I'.code.toByte() &&
+                    header[2] == 'F'.code.toByte() && header[3] == 'F'.code.toByte() &&
+                    header[8] == 'W'.code.toByte() && header[9] == 'E'.code.toByte() &&
+                    header[10] == 'B'.code.toByte() && header[11] == 'P'.code.toByte()
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     /**
      * Collects every library image under [rootDoc], recursively (depth <= 3),
      * so files directly in the selected folder as well as in `sfw/`, `nsfw/`,
@@ -566,6 +643,26 @@ class WallpaperRepository(
             return@withContext
         }
         try {
+            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
+            // Prefer direct File access when all-files access is granted —
+            // it bypasses SAF entirely and is the most reliable path.
+            val libraryFileDir = if (isAllFilesAccessGranted()) treeUriToFile(folderUriString) else null
+            if (libraryFileDir != null) {
+                val files = collectLibraryFilesViaFile(libraryFileDir)
+                Log.d("WallpaperRepo", "Library scan (File) found ${files.size} image file(s) under ${libraryFileDir.absolutePath}")
+                val optimizedCount = files.count { (file, id) -> isFileOptimizedViaFile(file, id, optimizedIds) }
+                val scanError = when {
+                    files.isEmpty() -> "Found 0 image files in the selected folder (root + subfolders)."
+                    else -> _optimizationProgress.value.lastError.takeIf { it.contains("Could not convert") || it.contains("Cannot") || it.contains("Permission") } ?: ""
+                }
+                _optimizationProgress.value = _optimizationProgress.value.copy(
+                    optimized = optimizedCount,
+                    total = files.size,
+                    failed = (files.size - optimizedCount).coerceAtLeast(0),
+                    lastError = scanError
+                )
+                return@withContext
+            }
             val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(folderUriString))
             if (rootDoc == null || !rootDoc.exists()) {
                 _optimizationProgress.value = OptimizationProgress(0, 0, false, 0, "Library folder not found. Re-select it in Settings.")
@@ -580,7 +677,6 @@ class WallpaperRepository(
                 }
                 Log.w("WallpaperRepo", "Library folder not readable: $folderUriString (re-select the folder in Settings) persisted=[$persisted]")
             }
-            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
             val files = collectLibraryFiles(rootDoc)
             Log.d("WallpaperRepo", "Library scan found ${files.size} image file(s) under ${rootDoc.uri}")
             val optimizedCount = files.count { (file, id) -> isFileOptimized(file, id, optimizedIds) }
@@ -617,6 +713,56 @@ class WallpaperRepository(
 
             _optimizationProgress.value = _optimizationProgress.value.copy(isRunning = true)
             try {
+                // File path (all-files access): bypass SAF entirely.
+                val libraryFileDir = if (isAllFilesAccessGranted()) treeUriToFile(folderUriString) else null
+                if (libraryFileDir != null) {
+                    val optimizedIds = preferences.optimizedWallpaperIdsFlow.first().toMutableSet()
+                    val allFiles = collectLibraryFilesViaFile(libraryFileDir)
+                    Log.d("WallpaperRepo", "Optimization pass (File) queued ${allFiles.size} file(s) under ${libraryFileDir.absolutePath}")
+                    var optimizedCount = allFiles.count { (file, id) -> isFileOptimizedViaFile(file, id, optimizedIds) }
+                    var failedCount = allFiles.size - optimizedCount
+                    var lastErrorMsg = _optimizationProgress.value.lastError
+                    _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
+                    for ((file, id) in allFiles) {
+                        if (isFileOptimizedViaFile(file, id, optimizedIds)) continue
+                        val optimizedFile = try {
+                            com.example.util.ImageCompressionHelper.optimizeFile(file)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            Log.e("WallpaperRepo", "Error optimizing file ${file.name}", e)
+                            null
+                        }
+                        if (optimizedFile != null) {
+                            optimizedIds.add(id)
+                            preferences.markWallpaperOptimized(id)
+                            try {
+                                if (favoriteDao.isFavoriteDirect(id)) {
+                                    favoriteDao.updateLocalFilePath(id, Uri.fromFile(optimizedFile).toString())
+                                }
+                            } catch (e: Exception) {
+                                Log.e("WallpaperRepo", "Error updating local path for $id", e)
+                            }
+                            if (optimizedCount < allFiles.size) optimizedCount += 1
+                            failedCount = (allFiles.size - optimizedCount).coerceAtLeast(0)
+                        } else {
+                            val reason = com.example.util.ImageCompressionHelper.lastFailureReason.ifBlank {
+                                "Could not convert ${file.name}."
+                            }
+                            lastErrorMsg = reason
+                            Log.w("WallpaperRepo", "File optimization did not complete for ${file.name}; will retry — $reason")
+                        }
+                        _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
+                    }
+                    try {
+                        val rootDocForIndex = DocumentFile.fromTreeUri(context, Uri.parse(folderUriString))
+                        if (rootDocForIndex != null) updateFolderMetadataIndex(rootDocForIndex)
+                    } catch (e: Exception) {
+                        Log.w("WallpaperRepo", "Could not update index.json after File optimization", e)
+                    }
+                    _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false, failedCount, lastErrorMsg)
+                    return@withLock
+                }
                 val folderUri = Uri.parse(folderUriString)
                 val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
                 if (rootDoc == null || !rootDoc.exists()) {

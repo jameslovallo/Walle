@@ -122,6 +122,45 @@ fun SettingsScreen(
         }
     }
 
+    // Runtime media-access permission (Android 13+ photo picker model).
+    val mediaPermission = if (android.os.Build.VERSION.SDK_INT >= 33) {
+        android.Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        android.Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        android.util.Log.d("SettingsScreen", "Media permission granted=$granted")
+        viewModel.startLibraryOptimization()
+    }
+
+    // All-files access settings return (no result code — just re-check).
+    val allFilesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        android.util.Log.d(
+            "SettingsScreen",
+            "All-files manager=${android.os.Environment.isExternalStorageManager()}"
+        )
+        viewModel.startLibraryOptimization()
+    }
+
+    fun launchAllFilesSettings() {
+        try {
+            val pkgUri = Uri.parse("package:${context.packageName}")
+            val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, pkgUri)
+            allFilesLauncher.launch(intent)
+        } catch (e: Exception) {
+            try {
+                val fallback = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                allFilesLauncher.launch(fallback)
+            } catch (ex: Exception) {
+                android.util.Log.e("SettingsScreen", "Cannot open all-files settings", ex)
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -655,6 +694,27 @@ fun SettingsScreen(
                                     .testTag("library_reselect_button")
                             ) {
                                 Text("Re-select folder")
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { mediaPermissionLauncher.launch(mediaPermission) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("library_media_perm_button")
+                            ) {
+                                Text("Allow photo access")
+                            }
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { launchAllFilesSettings() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("library_allfiles_button")
+                            ) {
+                                Text("Allow all-files access")
                             }
                         }
                     } else if (uiState.optimizationLastError.isNotBlank() && total == 0) {
