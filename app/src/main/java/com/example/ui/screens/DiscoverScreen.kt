@@ -76,6 +76,7 @@ import com.example.ui.components.PositionedWallpaperImage
 fun DiscoverScreen(
     viewModel: WallEViewModel,
     uiState: WallEUIState,
+    onOpenNowPlaying: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val gridState = rememberLazyGridState()
@@ -175,9 +176,6 @@ fun DiscoverScreen(
                     ) { wallpaper ->
                         DiscoverWallpaperCard(
                             wallpaper = wallpaper,
-                            onDragOffset = { newOffset ->
-                                viewModel.saveWallpaperOffset(wallpaper.id, newOffset)
-                            },
                             onToggleFavorite = {
                                 viewModel.toggleFavoriteWallpaper(wallpaper)
                             },
@@ -186,6 +184,7 @@ fun DiscoverScreen(
                             },
                             onCardClick = {
                                 viewModel.applyWallpaperAsCurrent(wallpaper)
+                                onOpenNowPlaying()
                             },
                             onAppear = {
                                 viewModel.lazyDetectOffset(wallpaper)
@@ -419,7 +418,6 @@ fun DiscoverScreen(
 @Composable
 fun DiscoverWallpaperCard(
     wallpaper: Wallpaper,
-    onDragOffset: (Float) -> Unit,
     onToggleFavorite: () -> Unit,
     onFindSimilar: () -> Unit,
     onCardClick: () -> Unit,
@@ -429,8 +427,6 @@ fun DiscoverWallpaperCard(
     LaunchedEffect(wallpaper.id) {
         onAppear()
     }
-
-    var localOffset by remember(wallpaper.horizontalOffset) { mutableFloatStateOf(wallpaper.horizontalOffset) }
 
     val displayMetrics = LocalContext.current.resources.displayMetrics
     val deviceAspect = if (displayMetrics.heightPixels > 0) {
@@ -448,18 +444,11 @@ fun DiscoverWallpaperCard(
             .clickable { onCardClick() }
             .testTag("discover_card_${wallpaper.id}")
     ) {
-        // Image with horizontal drag gesture: live preview during drag (smooth, no saves),
-        // debounced persist only on drag end. Non-favorites are preview-only: never saved.
+        // Image rendered with detected/stored positioning offset; horizontal dragging is disabled in grid for smooth scrolling
         PositionedWallpaperImage(
             url = wallpaper.thumbUrl.ifBlank { wallpaper.fullUrl },
             fallbackUrl = wallpaper.fullUrl,
-            horizontalOffset = localOffset,
-            onDrag = { newOffset ->
-                localOffset = newOffset
-            },
-            onDragEnd = {
-                onDragOffset(localOffset)
-            },
+            horizontalOffset = wallpaper.horizontalOffset,
             modifier = Modifier.fillMaxSize()
         )
 

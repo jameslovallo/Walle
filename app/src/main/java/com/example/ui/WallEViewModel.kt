@@ -401,13 +401,18 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     fun applyWallpaperAsCurrent(wallpaper: Wallpaper) {
         viewModelScope.launch {
+            // Tapping a wallpaper applies it as the current wallpaper and pauses the schedule
+            preferences.setScheduleEnabled(false)
+            WallpaperIntervalWorker.cancel(app)
+            val offset = repository.getCachedOffset(wallpaper.id) ?: wallpaper.horizontalOffset
+            repository.setCachedOffset(wallpaper.id, offset)
             preferences.setCurrentWallpaper(
                 id = wallpaper.id,
                 url = wallpaper.fullUrl,
                 thumbUrl = wallpaper.thumbUrl,
                 purity = wallpaper.purity,
                 category = wallpaper.category,
-                offset = wallpaper.horizontalOffset,
+                offset = offset,
                 tags = wallpaper.tags
             )
             repository.notifyWallpaperChanged()

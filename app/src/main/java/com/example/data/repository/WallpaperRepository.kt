@@ -18,6 +18,7 @@ import com.example.data.model.Wallpaper
 import com.example.data.model.WallhavenImageItem
 import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -203,6 +204,9 @@ class WallpaperRepository(
             // Un-delete if previously deleted
             preferences.removeDeletedWallpaperId(id)
 
+            val effectiveOffset = getCachedOffset(id) ?: if (cropOffset in 0f..1f) cropOffset else 0.5f
+            setCachedOffset(id, effectiveOffset)
+
             // Generate high-performance internal thumbnail in app internal storage
             val internalThumb = generateInternalThumbnail(id, sourceUri = null, sourceUrl = thumbUrl.ifBlank { url })
             val fav = FavoriteWallpaper(
@@ -211,7 +215,7 @@ class WallpaperRepository(
                 thumbUrl = internalThumb.ifBlank { thumbUrl },
                 purity = purity,
                 category = category,
-                horizontalOffset = cropOffset,
+                horizontalOffset = effectiveOffset,
                 addedTimestamp = System.currentTimeMillis(),
                 tags = tags.joinToString(",")
             )
@@ -326,11 +330,21 @@ class WallpaperRepository(
      * caching the result immediately to prevent future duplicate calculations.
      */
     suspend fun applyFavorite(fav: FavoriteWallpaper) = withContext(Dispatchers.IO) {
-        val finalOffset = getOrDeterminePositionOffset(
-            fav.id,
-            fav.localFilePath ?: fav.thumbUrl.ifBlank { fav.url }
-        )
-        if (fav.horizontalOffset !in 0f..1f) {
+        val finalOffset = if (fav.horizontalOffset in 0f..1f) {
+            setCachedOffset(fav.id, fav.horizontalOffset)
+            fav.horizontalOffset
+        } else {
+            val cached = getCachedOffset(fav.id)
+            if (cached != null) {
+                cached
+            } else {
+                getOrDeterminePositionOffset(
+                    fav.id,
+                    fav.localFilePath ?: fav.thumbUrl.ifBlank { fav.url }
+                )
+            }
+        }
+        if (fav.horizontalOffset != finalOffset) {
             favoriteDao.updateCropOffset(fav.id, finalOffset)
         }
 
@@ -1111,7 +1125,10 @@ class WallpaperRepository(
                 positioningPrefs.edit().remove(id).apply()
             }
 
-            // 4. Process each scanned file (with its index metadata when present)
+            // 4. Process each scanned file: restore stored positioning and fast-insert into Room
+            val favoritesToInsert = mutableListOf<FavoriteWallpaper>()
+            val unpositionedItems = mutableListOf<Pair<String, String>>() // id to imageSource
+
             for (id in discoveredFiles.keys) {
                 val indexJson = indexedItemsMap[id]
                 val localFileInfo = discoveredFiles[id]
@@ -1121,34 +1138,48 @@ class WallpaperRepository(
                     ?: "sfw"
                 val category = indexJson?.optString("category") ?: "all"
 
-                // Check if existing positioning data was provided
-                val hasExistingOffset = indexJson != null && indexJson.has("horizontalOffset")
-                val horizontalOffset = if (hasExistingOffset) {
-                    val off = indexJson!!.optDouble("horizontalOffset", 0.5).toFloat().coerceIn(0f, 1f)
+                // Check stored positioning: index.json takes highest priority, then cached prefs, fallback 0.5f
+                val rawOffset = if (indexJson != null && indexJson.has("horizontalOffset")) {
+                    indexJson.optDouble("horizontalOffset", Double.NaN)
+                } else {
+                    Double.NaN
+                }
+
+                val hasValidStoredOffset = !rawOffset.isNaN() && rawOffset in 0.0..1.0
+                val horizontalOffset = if (hasValidStoredOffset) {
+                    val off = rawOffset.toFloat()
                     setCachedOffset(id, off)
                     off
                 } else {
-                    -1f // Unset: face detection will run upon application
+                    val cached = getCachedOffset(id)
+                    if (cached != null) {
+                        cached
+                    } else {
+                        val localUriStr = localFileInfo?.first?.uri?.toString() ?: ""
+                        unpositionedItems.add(id to localUriStr)
+                        0.5f
+                    }
                 }
 
                 val timestamp = indexJson?.optLong("timestamp", System.currentTimeMillis()) ?: System.currentTimeMillis()
+                val localFileUri = localFileInfo?.first?.uri
                 val url = indexJson?.optString("url")
-                    ?: localFileInfo?.first?.uri?.toString()
+                    ?: localFileUri?.toString()
                     ?: "https://w.wallhaven.cc/full/${id.take(2)}/wallhaven-$id.jpg"
 
-                val localFileUri = localFileInfo?.first?.uri
-
-                // Generate high-performance thumbnail stored in internal storage
-                val internalThumb = generateInternalThumbnail(
-                    id = id,
-                    sourceUri = localFileUri,
-                    sourceUrl = url
-                )
+                // Use internal thumbnail if already created; otherwise use localFileUri immediately
+                // so the grid displays instantly without waiting for thumbnail generation!
+                val thumbFile = getInternalThumbnailFile(id)
+                val initialThumb = if (thumbFile.exists() && thumbFile.length() > 0) {
+                    Uri.fromFile(thumbFile).toString()
+                } else {
+                    localFileUri?.toString() ?: url
+                }
 
                 val fav = FavoriteWallpaper(
                     id = id,
                     url = url,
-                    thumbUrl = internalThumb.ifBlank { localFileUri?.toString() ?: url },
+                    thumbUrl = initialThumb,
                     purity = purity,
                     category = category,
                     horizontalOffset = horizontalOffset,
@@ -1156,12 +1187,63 @@ class WallpaperRepository(
                     localFilePath = localFileUri?.toString()
                 )
 
+                favoritesToInsert.add(fav)
+            }
+
+            // Immediately insert all favorites into the DB so the UI populates instantaneously
+            for (fav in favoritesToInsert) {
                 favoriteDao.insertFavorite(fav)
             }
 
             // 5. Update/refresh index.json in the user folder so it reflects all favorites
             updateFolderMetadataIndex(rootDoc)
             notifyWallpaperChanged()
+
+            // 6. Asynchronously optimize thumbnails in background and run face detection on unpositioned items
+            CoroutineScope(Dispatchers.IO).launch {
+                for (fav in favoritesToInsert) {
+                    try {
+                        val thumbFile = getInternalThumbnailFile(fav.id)
+                        if (!thumbFile.exists() || thumbFile.length() == 0L) {
+                            val localUri = fav.localFilePath?.let { Uri.parse(it) }
+                            val internalThumb = generateInternalThumbnail(
+                                id = fav.id,
+                                sourceUri = localUri,
+                                sourceUrl = fav.url
+                            )
+                            if (internalThumb.isNotBlank() && internalThumb != fav.thumbUrl) {
+                                favoriteDao.insertFavorite(fav.copy(thumbUrl = internalThumb))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("WallpaperRepo", "Error generating background thumbnail for ${fav.id}", e)
+                    }
+                }
+
+                if (unpositionedItems.isNotEmpty()) {
+                    var anyOffsetUpdated = false
+                    for ((id, src) in unpositionedItems) {
+                        try {
+                            val detected = detectFaceOffset(src)
+                            setCachedOffset(id, detected)
+                            favoriteDao.updateCropOffset(id, detected)
+                            anyOffsetUpdated = true
+                        } catch (e: Exception) {
+                            Log.e("WallpaperRepo", "Error detecting background offset for $id", e)
+                        }
+                    }
+                    if (anyOffsetUpdated) {
+                        try {
+                            folderMutex.withLock {
+                                updateFolderMetadataIndex(rootDoc)
+                            }
+                            notifyWallpaperChanged()
+                        } catch (e: Exception) {
+                            // Ignore
+                        }
+                    }
+                }
+            }
             }
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error syncing and loading from selected folder", e)
@@ -1254,9 +1336,12 @@ class WallpaperRepository(
                     put("id", fav.id)
                     put("purity", fav.purity)
                     put("category", fav.category)
-                    if (fav.horizontalOffset in 0f..1f) {
-                        put("horizontalOffset", fav.horizontalOffset)
+                    val offsetToPersist = if (fav.horizontalOffset in 0f..1f) {
+                        fav.horizontalOffset
+                    } else {
+                        getCachedOffset(fav.id) ?: 0.5f
                     }
+                    put("horizontalOffset", offsetToPersist.toDouble())
                     put("url", fav.url)
                     put("timestamp", fav.addedTimestamp)
                     put("optimized", optimizedIds.contains(fav.id))

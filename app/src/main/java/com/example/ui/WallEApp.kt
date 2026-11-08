@@ -209,11 +209,13 @@ fun WallEApp(
                 when (tabIndex) {
                     0 -> DiscoverScreen(
                         viewModel = viewModel,
-                        uiState = uiState
+                        uiState = uiState,
+                        onOpenNowPlaying = { showCurrentFavoriteModal = true }
                     )
                     1 -> FavoritesScreen(
                         viewModel = viewModel,
-                        uiState = uiState
+                        uiState = uiState,
+                        onOpenNowPlaying = { showCurrentFavoriteModal = true }
                     )
                     2 -> SettingsScreen(
                         viewModel = viewModel,
@@ -273,7 +275,7 @@ fun CurrentFavoriteModalContent(
         9f / 20f
     }
 
-    var localOffset by remember(currentWallpaper.horizontalOffset) {
+    var localOffset by remember(currentWallpaper.id, currentWallpaper.horizontalOffset) {
         mutableFloatStateOf(currentWallpaper.horizontalOffset)
     }
 

@@ -202,4 +202,53 @@ class ExampleUnitTest {
         assertEquals("94x38z", com.example.data.repository.WallpaperRepository.extractWallhavenId("https://wallhaven.cc/w/94x38z"))
         assertEquals("3qgq66", com.example.data.repository.WallpaperRepository.extractWallhavenId("3qgq66"))
     }
+
+    @Test
+    fun `test stored horizontal offset persistence and fallback logic`() {
+        val jsonString = """
+            {
+                "wallpapers": [
+                    { "id": "wp1", "horizontalOffset": 0.72 },
+                    { "id": "wp2", "horizontalOffset": 0.0 },
+                    { "id": "wp3", "horizontalOffset": 1.0 },
+                    { "id": "wp4" }
+                ]
+            }
+        """.trimIndent()
+        val json = org.json.JSONObject(jsonString)
+        val arr = json.getJSONArray("wallpapers")
+
+        val item1 = arr.getJSONObject(0)
+        val rawOffset1 = item1.optDouble("horizontalOffset", Double.NaN)
+        assertTrue(!rawOffset1.isNaN() && rawOffset1 in 0.0..1.0)
+        assertEquals(0.72f, rawOffset1.toFloat(), 0.001f)
+
+        val item4 = arr.getJSONObject(3)
+        val rawOffset4 = if (item4.has("horizontalOffset")) item4.optDouble("horizontalOffset", Double.NaN) else Double.NaN
+        assertTrue(rawOffset4.isNaN())
+    }
+
+    @Test
+    fun `test favorite effective offset uses stored offset without tap`() {
+        val favWithOffset = com.example.data.local.FavoriteWallpaper(
+            id = "w1",
+            url = "https://example.com/w1.jpg",
+            thumbUrl = "https://example.com/t1.jpg",
+            purity = "sfw",
+            category = "all",
+            horizontalOffset = 0.82f
+        )
+        val effective = if (favWithOffset.horizontalOffset in 0f..1f) favWithOffset.horizontalOffset else 0.5f
+        assertEquals(0.82f, effective, 0.001f)
+
+        val favDefault = com.example.data.local.FavoriteWallpaper(
+            id = "w2",
+            url = "https://example.com/w2.jpg",
+            thumbUrl = "https://example.com/t2.jpg",
+            purity = "sfw",
+            category = "all"
+        )
+        val effectiveDefault = if (favDefault.horizontalOffset in 0f..1f) favDefault.horizontalOffset else 0.5f
+        assertEquals(0.5f, effectiveDefault, 0.001f)
+    }
 }

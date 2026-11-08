@@ -50,6 +50,7 @@ import com.example.ui.components.PositionedWallpaperImage
 fun FavoritesScreen(
     viewModel: WallEViewModel,
     uiState: WallEUIState,
+    onOpenNowPlaying: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val favorites by viewModel.favorites.collectAsState()
@@ -104,12 +105,12 @@ fun FavoritesScreen(
                     FavoriteCard(
                         favorite = fav,
                         onDeleteClick = { viewModel.deleteFavorite(fav.id) },
-                        onItemClick = { viewModel.applyFavoriteAsCurrent(fav) },
+                        onItemClick = {
+                            viewModel.applyFavoriteAsCurrent(fav)
+                            onOpenNowPlaying()
+                        },
                         onFindSimilar = {
                             viewModel.searchSimilar(fav.id)
-                        },
-                        onDragEnd = { newOffset ->
-                            viewModel.updateFavoriteOffset(fav.id, newOffset)
                         }
                     )
                 }
@@ -123,11 +124,9 @@ fun FavoriteCard(
     favorite: FavoriteWallpaper,
     onDeleteClick: () -> Unit,
     onItemClick: () -> Unit,
-    onFindSimilar: () -> Unit,
-    onDragEnd: (Float) -> Unit
+    onFindSimilar: () -> Unit
 ) {
     val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
-    var localOffset by remember(effectiveOffset) { mutableFloatStateOf(effectiveOffset) }
 
     val displayMetrics = LocalContext.current.resources.displayMetrics
     val deviceAspect = if (displayMetrics.heightPixels > 0) {
@@ -145,17 +144,11 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        // Image with smooth horizontal drag gesture; positioning data is saved only when user input is completed
+        // Image rendered with exact stored positioning offset; horizontal dragging is disabled in grid for smooth scrolling
         PositionedWallpaperImage(
             url = favorite.thumbUrl.ifBlank { favorite.url },
             fallbackUrl = favorite.url,
-            horizontalOffset = localOffset,
-            onDrag = { newOffset ->
-                localOffset = newOffset
-            },
-            onDragEnd = {
-                onDragEnd(localOffset)
-            },
+            horizontalOffset = effectiveOffset,
             modifier = Modifier.fillMaxSize()
         )
 
