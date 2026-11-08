@@ -626,13 +626,36 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.error
                         )
-                        androidx.compose.material3.OutlinedButton(
-                            onClick = { viewModel.startLibraryOptimization() },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("library_retry_button")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Retry conversion")
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { viewModel.startLibraryOptimization() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("library_retry_button")
+                            ) {
+                                Text("Retry conversion")
+                            }
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = {
+                                    val pickerIntent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                                        addFlags(
+                                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                                                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                                        )
+                                    }
+                                    folderPickerLauncher.launch(pickerIntent)
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("library_reselect_button")
+                            ) {
+                                Text("Re-select folder")
+                            }
                         }
                     } else if (uiState.optimizationLastError.isNotBlank() && total == 0) {
                         Text(

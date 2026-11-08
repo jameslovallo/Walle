@@ -30,20 +30,40 @@ object ImageCompressionHelper {
      * right after a folder was granted or files were copied in.
      */
     private suspend fun openInputStreamWithRetry(context: Context, uri: Uri): java.io.InputStream? {
-        var last: Exception? = null
+        var last: Throwable? = null
         repeat(3) { attempt ->
             try {
                 val stream = context.contentResolver.openInputStream(uri)
                 if (stream != null) return stream
+                Log.w(TAG, "openInputStream attempt ${attempt + 1} for $uri returned null")
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 last = e
                 Log.w(TAG, "openInputStream attempt ${attempt + 1} for $uri failed: ${e.message}")
             }
+            // Fallback: open via file descriptor — some providers return
+            // null from openInputStream but work via openFileDescriptor.
+            try {
+                val fd = context.contentResolver.openFileDescriptor(uri, "r")
+                if (fd != null) return java.io.FileInputStream(fd.fileDescriptor)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                last = e
+                Log.w(TAG, "openFileDescriptor attempt ${attempt + 1} for $uri failed: ${e.message}")
+            }
             if (attempt < 2) delay(200L * (attempt + 1))
         }
-        Log.w(TAG, "openInputStream retries exhausted for $uri: $last")
+        Log.w(TAG, "open retries exhausted for $uri: $last")
+        // Include the exact failure so the UI can tell permission loss
+        // (SecurityException) from a missing file (FileNotFoundException).
+        val err = last
+        lastFailureReason = when (err) {
+            is SecurityException -> "Permission denied for $uri (re-select the library folder to grant read/write access). ${err.message ?: ""}"
+            is java.io.FileNotFoundException -> "File not found $uri (folder may have changed; re-select it). ${err.message ?: ""}"
+            else -> "Cannot open $uri (${err?.message ?: "stream was null"})"
+        }
         return null
     }
 
@@ -80,7 +100,9 @@ object ImageCompressionHelper {
                 BitmapFactory.decodeStream(stream, null, options)
             } ?: run {
                 Log.w(TAG, "Cannot open source for $sourceName")
-                lastFailureReason = "Cannot open source $sourceName (read permission? Re-select the folder in Settings — pick Same Folder again to grant read/write access.)"
+                if (lastFailureReason.isBlank()) {
+                    lastFailureReason = "Cannot open source $sourceName (read permission? Re-select the library folder in Settings to grant read/write access.)"
+                }
                 return@withContext null
             }
 

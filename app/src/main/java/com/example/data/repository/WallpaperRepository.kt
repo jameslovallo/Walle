@@ -573,7 +573,12 @@ class WallpaperRepository(
             }
             val unreadable = !rootDoc.canRead()
             if (unreadable) {
-                Log.w("WallpaperRepo", "Library folder not readable: $folderUriString (re-select the folder in Settings)")
+                val persisted = try {
+                    context.contentResolver.persistedUriPermissions.joinToString { "${it.uri} r=${it.isReadPermission} w=${it.isWritePermission}" }
+                } catch (e: Exception) {
+                    "unavailable: ${e.message}"
+                }
+                Log.w("WallpaperRepo", "Library folder not readable: $folderUriString (re-select the folder in Settings) persisted=[$persisted]")
             }
             val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
             val files = collectLibraryFiles(rootDoc)
@@ -648,10 +653,17 @@ class WallpaperRepository(
 
                 for (item in allFiles) {
                     if (isFileOptimized(item.file, item.id, optimizedIds)) continue
+                    // Re-fetch the file fresh from its parent so we don't
+                    // use a stale URI from the scan snapshot.
+                    val freshFile = try {
+                        item.parentDir.findFile(item.file.name ?: "") ?: item.file
+                    } catch (e: Exception) {
+                        item.file
+                    }
                     val optimizedFile = try {
                         com.example.util.ImageCompressionHelper.optimizeDocumentFile(
                             context = context,
-                            docFile = item.file,
+                            docFile = freshFile,
                             parentDir = item.parentDir
                         )
                     } catch (e: CancellationException) {
