@@ -283,89 +283,7 @@ fun SettingsScreen(
                     )
                 }
 
-                // 1. Grayscale Filter Slider
-                val grayscalePercent = (activeFilters.grayscale * 100).roundToInt()
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Grayscale",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "$grayscalePercent%",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Slider(
-                        value = activeFilters.grayscale,
-                        onValueChange = { newVal ->
-                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
-                            if (snapped != activeFilters.grayscale) {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.updateFilters(
-                                    grayscale = snapped,
-                                    blur = activeFilters.blur,
-                                    brightness = activeFilters.brightness,
-                                    vignette = activeFilters.vignette
-                                )
-                            }
-                        },
-                        valueRange = 0f..1f,
-                        steps = 19,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("grayscale_slider")
-                    )
-                }
-
-                // 2. Blur Filter Slider
-                val blurPercent = (activeFilters.blur * 100).roundToInt()
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Blur",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = "$blurPercent%",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Slider(
-                        value = activeFilters.blur,
-                        onValueChange = { newVal ->
-                            val snapped = (Math.round(newVal * 100f) / 100f).coerceIn(0f, 0.1f)
-                            if (snapped != activeFilters.blur) {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.updateFilters(
-                                    grayscale = activeFilters.grayscale,
-                                    blur = snapped,
-                                    brightness = activeFilters.brightness,
-                                    vignette = activeFilters.vignette
-                                )
-                            }
-                        },
-                        valueRange = 0f..0.1f,
-                        steps = 9,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("blur_slider")
-                    )
-                }
-
-                // 3. Brightness Filter Slider
+                // 1. Brightness Filter Slider
                 val brightnessPercent = (activeFilters.brightness * 100).roundToInt()
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
@@ -406,7 +324,48 @@ fun SettingsScreen(
                     )
                 }
 
-                // 4. Vignette Filter Slider
+                // 2. Grayscale Filter Slider
+                val grayscalePercent = (activeFilters.grayscale * 100).roundToInt()
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Grayscale",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "$grayscalePercent%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Slider(
+                        value = activeFilters.grayscale,
+                        onValueChange = { newVal ->
+                            val snapped = (Math.round(newVal * 20f) / 20f).coerceIn(0f, 1f)
+                            if (snapped != activeFilters.grayscale) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                viewModel.updateFilters(
+                                    grayscale = snapped,
+                                    blur = activeFilters.blur,
+                                    brightness = activeFilters.brightness,
+                                    vignette = activeFilters.vignette
+                                )
+                            }
+                        },
+                        valueRange = 0f..1f,
+                        steps = 19,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("grayscale_slider")
+                    )
+                }
+
+                // 3. Vignette Filter Slider
                 val vignettePercent = (activeFilters.vignette * 100).roundToInt()
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
@@ -444,6 +403,47 @@ fun SettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("vignette_slider")
+                    )
+                }
+
+                // 4. Blur Filter Slider
+                val blurPercent = (activeFilters.blur * 100).roundToInt()
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Blur",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "$blurPercent%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Slider(
+                        value = activeFilters.blur,
+                        onValueChange = { newVal ->
+                            val snapped = (Math.round(newVal * 100f) / 100f).coerceIn(0f, 0.1f)
+                            if (snapped != activeFilters.blur) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                viewModel.updateFilters(
+                                    grayscale = activeFilters.grayscale,
+                                    blur = snapped,
+                                    brightness = activeFilters.brightness,
+                                    vignette = activeFilters.vignette
+                                )
+                            }
+                        },
+                        valueRange = 0f..0.1f,
+                        steps = 9,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("blur_slider")
                     )
                 }
 

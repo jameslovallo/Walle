@@ -523,6 +523,38 @@ class WallpaperRepository(
     }
 
     /**
+     * Collects every library image under [rootDoc], recursively (depth <= 3),
+     * so files directly in the selected folder as well as in `sfw/`, `nsfw/`,
+     * or any nested subfolder are included. Returns (file, id, parentDir).
+     */
+    private fun collectLibraryFiles(rootDoc: DocumentFile, maxDepth: Int = 3): List<Triple<DocumentFile, String, DocumentFile>> {
+        val out = mutableListOf<Triple<DocumentFile, String, DocumentFile>>()
+        fun walk(dir: DocumentFile, depth: Int) {
+            val entries = try {
+                dir.listFiles()
+            } catch (e: Exception) {
+                Log.w("WallpaperRepo", "Could not list ${dir.uri} (depth=$depth)", e)
+                return
+            }
+            if (depth == 0) {
+                Log.d("WallpaperRepo", "Library scan: ${dir.uri} canRead=${dir.canRead()} canWrite=${dir.canWrite()} entries=${entries.size}")
+            }
+            for (entry in entries) {
+                if (entry.isDirectory) {
+                    if (depth < maxDepth) walk(entry, depth + 1)
+                } else {
+                    val name = entry.name ?: continue
+                    if (name.equals("index.json", ignoreCase = true)) continue
+                    val id = imageIdFromFileName(name) ?: continue
+                    out.add(Triple(entry, id, dir))
+                }
+            }
+        }
+        walk(rootDoc, 0)
+        return out
+    }
+
+    /**
      * Refreshes optimization progress by scanning the configured library folder.
      */
     suspend fun refreshOptimizationProgress() = withContext(Dispatchers.IO) {
@@ -537,18 +569,12 @@ class WallpaperRepository(
                 _optimizationProgress.value = OptimizationProgress(0, 0, false)
                 return@withContext
             }
-            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
-            val files = mutableListOf<Pair<DocumentFile, String>>()
-            val subfolders = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
-            for (subDir in subfolders) {
-                if (!subDir.exists() || !subDir.isDirectory) continue
-                for (file in subDir.listFiles()) {
-                    if (file.isDirectory) continue
-                    val name = file.name ?: continue
-                    val id = imageIdFromFileName(name) ?: continue
-                    files.add(file to id)
-                }
+            if (!rootDoc.canRead()) {
+                Log.w("WallpaperRepo", "Library folder not readable: $folderUriString (re-select the folder in Settings)")
             }
+            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
+            val files = collectLibraryFiles(rootDoc)
+            Log.d("WallpaperRepo", "Library scan found ${files.size} image file(s) under ${rootDoc.uri}")
             val optimizedCount = files.count { (file, id) -> isFileOptimized(file, id, optimizedIds) }
             _optimizationProgress.value = _optimizationProgress.value.copy(
                 optimized = optimizedCount,
@@ -593,19 +619,14 @@ class WallpaperRepository(
 
                 val optimizedIds = preferences.optimizedWallpaperIdsFlow.first().toMutableSet()
 
-                // Collect every image file in the library so duplicates and
+                // Collect every image file in the library (recursive, so
+                // files at any depth are included) so duplicates and
                 // previously mis-marked large originals are revisited.
                 data class PendingFile(val file: DocumentFile, val id: String, val parentDir: DocumentFile)
-                val allFiles = mutableListOf<PendingFile>()
-                val subfolders = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
-                for (subDir in subfolders) {
-                    if (!subDir.exists() || !subDir.isDirectory) continue
-                    for (file in subDir.listFiles()) {
-                        if (file.isDirectory) continue
-                        val id = imageIdFromFileName(file.name ?: continue) ?: continue
-                        allFiles.add(PendingFile(file, id, subDir))
-                    }
+                val allFiles = collectLibraryFiles(rootDoc).map { (file, id, parentDir) ->
+                    PendingFile(file, id, parentDir)
                 }
+                Log.d("WallpaperRepo", "Optimization pass queued ${allFiles.size} file(s); running=true")
 
                 var optimizedCount = allFiles.count { isFileOptimized(it.file, it.id, optimizedIds) }
                 _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true)

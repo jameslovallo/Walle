@@ -167,6 +167,23 @@ object ImageCompressionHelper {
                         if (deleteFileVerified(context, docFile, parent)) {
                             return@withContext webpFile
                         }
+                        // Some external-storage trees (e.g. Pictures on
+                        // Android 10+) block deleting files this app did not
+                        // create. Don't stick at 0% for that: fall back to
+                        // replacing the original bytes in place (needs only
+                        // write permission), then clean up the sibling copy.
+                        Log.w(TAG, "Delete of ${docFile.name} blocked; trying in-place replacement")
+                        if (writeBytes(context, uri, compressedBytes) &&
+                            verifyWrittenLength(context, docFile, compressedBytes.size)
+                        ) {
+                            deleteFileQuietly(context, webpFile)
+                            try {
+                                docFile.renameTo(targetName)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Renaming ${docFile.name} failed after in-place rewrite", e)
+                            }
+                            return@withContext docFile
+                        }
                         Log.w(TAG, "Wrote $targetName but original ${docFile.name} still present; will retry")
                         return@withContext null
                     }
