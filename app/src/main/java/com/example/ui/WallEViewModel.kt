@@ -56,7 +56,9 @@ data class WallEUIState(
     // Library optimization (always on by default: 4K max, WebP)
     val optimizationOptimized: Int = 0,
     val optimizationTotal: Int = 0,
-    val isOptimizingLibrary: Boolean = false
+    val isOptimizingLibrary: Boolean = false,
+    val optimizationFailed: Int = 0,
+    val optimizationLastError: String = ""
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -204,7 +206,9 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value.copy(
                     optimizationOptimized = progress.optimized,
                     optimizationTotal = progress.total,
-                    isOptimizingLibrary = progress.isRunning
+                    isOptimizingLibrary = progress.isRunning,
+                    optimizationFailed = progress.failed,
+                    optimizationLastError = progress.lastError
                 )
             }
         }

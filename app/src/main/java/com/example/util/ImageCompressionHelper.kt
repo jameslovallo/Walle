@@ -19,6 +19,10 @@ object ImageCompressionHelper {
     /** Maximum allowed dimensions for all images (4K). */
     val MAX_4K_DIMS: Pair<Int, Int> = Pair(3840, 2160)
 
+    /** Last failure reason (for UI diagnostics when progress is stuck). */
+    @Volatile
+    var lastFailureReason: String = ""
+
     /**
      * Optimizes an image file: caps dimensions at 4K max and encodes as WebP.
      *
@@ -43,6 +47,7 @@ object ImageCompressionHelper {
         val maxDims = MAX_4K_DIMS
         val uri = docFile.uri
         val sourceName = docFile.name ?: "unknown"
+        lastFailureReason = ""
 
         try {
             // First decode bounds only
@@ -51,6 +56,7 @@ object ImageCompressionHelper {
                 BitmapFactory.decodeStream(stream, null, options)
             } ?: run {
                 Log.w(TAG, "Cannot open source for $sourceName")
+                lastFailureReason = "Cannot open source $sourceName (read permission?)"
                 return@withContext null
             }
 
@@ -58,6 +64,7 @@ object ImageCompressionHelper {
             val origHeight = options.outHeight
             if (origWidth <= 0 || origHeight <= 0) {
                 Log.w(TAG, "Unsupported image format for $sourceName (${origWidth}x${origHeight})")
+                lastFailureReason = "Unsupported image format $sourceName"
                 return@withContext null
             }
 
@@ -92,6 +99,7 @@ object ImageCompressionHelper {
                 null
             } ?: run {
                 Log.w(TAG, "Decode returned null for $sourceName")
+                lastFailureReason = "Decode failed $sourceName"
                 return@withContext null
             }
 
@@ -137,6 +145,7 @@ object ImageCompressionHelper {
 
             if (!compressOk || compressedBytes.isEmpty()) {
                 Log.w(TAG, "Compress produced no bytes for $sourceName")
+                lastFailureReason = "Compression produced no bytes for $sourceName"
                 return@withContext null
             }
             Log.d(TAG, "Encoded $sourceName ${origWidth}x${origHeight} -> ${compressedBytes.size} bytes WebP")
@@ -147,6 +156,7 @@ object ImageCompressionHelper {
                 // the source before a replacement exists).
                 val ok = writeBytes(context, uri, compressedBytes) &&
                     verifyWrittenLength(context, docFile, compressedBytes.size)
+                if (!ok) lastFailureReason = "Cannot rewrite $sourceName (write permission?)"
                 return@withContext if (ok) docFile else null
             }
 
@@ -185,6 +195,7 @@ object ImageCompressionHelper {
                             return@withContext docFile
                         }
                         Log.w(TAG, "Wrote $targetName but original ${docFile.name} still present; will retry")
+                        lastFailureReason = "Cannot replace $sourceName (delete blocked)"
                         return@withContext null
                     }
                     // Fresh file is unusable; remove it so it doesn't linger
@@ -201,6 +212,7 @@ object ImageCompressionHelper {
             if (!writeBytes(context, uri, compressedBytes) ||
                 !verifyWrittenLength(context, docFile, compressedBytes.size)
             ) {
+                lastFailureReason = "Cannot write $sourceName (write permission?)"
                 return@withContext null
             }
             try {

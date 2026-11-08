@@ -85,6 +85,13 @@ fun FavoritesScreen(
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
+                if (!uiState.isOptimizingLibrary && uiState.optimizationLastError.isNotBlank()) {
+                    Text(
+                        text = uiState.optimizationLastError,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
         Box(

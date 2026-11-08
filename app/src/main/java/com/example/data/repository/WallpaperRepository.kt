@@ -53,7 +53,9 @@ class WallpaperRepository(
     data class OptimizationProgress(
         val optimized: Int = 0,
         val total: Int = 0,
-        val isRunning: Boolean = false
+        val isRunning: Boolean = false,
+        val failed: Int = 0,
+        val lastError: String = ""
     )
 
     private val _optimizationProgress = MutableStateFlow(OptimizationProgress())
@@ -560,28 +562,39 @@ class WallpaperRepository(
     suspend fun refreshOptimizationProgress() = withContext(Dispatchers.IO) {
         val folderUriString = preferences.localFolderUriFlow.first()
         if (folderUriString.isBlank()) {
-            _optimizationProgress.value = OptimizationProgress(0, 0, false)
+            _optimizationProgress.value = OptimizationProgress(0, 0, false, 0, "No library folder selected. Use Settings → Select Save Folder.")
             return@withContext
         }
         try {
             val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(folderUriString))
             if (rootDoc == null || !rootDoc.exists()) {
-                _optimizationProgress.value = OptimizationProgress(0, 0, false)
+                _optimizationProgress.value = OptimizationProgress(0, 0, false, 0, "Library folder not found. Re-select it in Settings.")
                 return@withContext
             }
-            if (!rootDoc.canRead()) {
+            val unreadable = !rootDoc.canRead()
+            if (unreadable) {
                 Log.w("WallpaperRepo", "Library folder not readable: $folderUriString (re-select the folder in Settings)")
             }
             val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
             val files = collectLibraryFiles(rootDoc)
             Log.d("WallpaperRepo", "Library scan found ${files.size} image file(s) under ${rootDoc.uri}")
             val optimizedCount = files.count { (file, id) -> isFileOptimized(file, id, optimizedIds) }
+            val scanError = when {
+                unreadable -> "Library folder unreadable — re-select it in Settings."
+                files.isEmpty() -> "Found 0 image files in the selected folder (root + subfolders)."
+                else -> _optimizationProgress.value.lastError
+            }
             _optimizationProgress.value = _optimizationProgress.value.copy(
                 optimized = optimizedCount,
-                total = files.size
+                total = files.size,
+                failed = (files.size - optimizedCount).coerceAtLeast(0),
+                lastError = scanError
             )
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error refreshing optimization progress", e)
+            _optimizationProgress.value = _optimizationProgress.value.copy(
+                lastError = "Could not scan library folder: ${e.message}"
+            )
         }
     }
 
@@ -629,7 +642,9 @@ class WallpaperRepository(
                 Log.d("WallpaperRepo", "Optimization pass queued ${allFiles.size} file(s); running=true")
 
                 var optimizedCount = allFiles.count { isFileOptimized(it.file, it.id, optimizedIds) }
-                _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true)
+                var failedCount = allFiles.size - optimizedCount
+                var lastErrorMsg = _optimizationProgress.value.lastError
+                _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
 
                 for (item in allFiles) {
                     if (isFileOptimized(item.file, item.id, optimizedIds)) continue
@@ -657,17 +672,22 @@ class WallpaperRepository(
                         } catch (e: Exception) {
                             Log.e("WallpaperRepo", "Error updating local path for ${item.id}", e)
                         }
-                        optimizedCount += 1
+                        if (optimizedCount < allFiles.size) optimizedCount += 1
+                        failedCount = (allFiles.size - optimizedCount).coerceAtLeast(0)
                     } else {
                         // Leave unmarked so the file is retried on the next run.
-                        Log.w("WallpaperRepo", "Optimization did not complete for ${item.file.name}; will retry")
+                        val reason = com.example.util.ImageCompressionHelper.lastFailureReason.ifBlank {
+                            "Could not convert ${item.file.name}."
+                        }
+                        lastErrorMsg = reason
+                        Log.w("WallpaperRepo", "Optimization did not complete for ${item.file.name}; will retry — $reason")
                     }
-                    _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true)
+                    _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
                 }
 
                 // Update metadata index.json with optimized status
                 updateFolderMetadataIndex(rootDoc)
-                _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false)
+                _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false, failedCount, lastErrorMsg)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {

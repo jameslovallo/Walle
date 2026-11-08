@@ -601,6 +601,27 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
+                    if (uiState.optimizationLastError.isNotBlank() && total > 0 && optimized < total) {
+                        Text(
+                            text = uiState.optimizationLastError,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = { viewModel.startLibraryOptimization() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("library_retry_button")
+                        ) {
+                            Text("Retry conversion")
+                        }
+                    } else if (uiState.optimizationLastError.isNotBlank() && total == 0) {
+                        Text(
+                            text = uiState.optimizationLastError,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
 
                 // Wallhaven API Key input
