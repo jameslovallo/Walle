@@ -28,8 +28,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -324,19 +324,17 @@ fun CurrentFavoriteModalContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .testTag("modal_preview_card")
         ) {
-            // Slide transition between wallpapers when skipped
+            // Seamless crossfade transition between wallpapers when skipped
             AnimatedContent(
                 targetState = currentWallpaper,
                 transitionSpec = {
-                    slideInHorizontally(
-                        initialOffsetX = { fullWidth -> fullWidth },
+                    fadeIn(
                         animationSpec = androidx.compose.animation.core.tween(durationMillis = 400)
-                    ) togetherWith slideOutHorizontally(
-                        targetOffsetX = { fullWidth -> -fullWidth },
+                    ) togetherWith fadeOut(
                         animationSpec = androidx.compose.animation.core.tween(durationMillis = 400)
                     )
                 },
-                label = "wallpaper_slide_preview"
+                label = "wallpaper_fade_preview"
             ) { targetWp ->
                 val url = targetWp.url.ifBlank { targetWp.thumbUrl }
                 if (url.isNotBlank()) {
@@ -354,95 +352,6 @@ fun CurrentFavoriteModalContent(
                     )
                 } else {
                     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF1E1E24)))
-                }
-            }
-
-            // Realistic launcher UI mockup: Status bar, Clock, Search bar, and App Dock
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Top: Status bar & Clock widget
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Status bar indicators
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "10:00",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.8f)))
-                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.8f)))
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.size(18.dp))
-
-                    // Big Clock widget
-                    Text(
-                        text = "10:00",
-                        style = MaterialTheme.typography.displayMedium,
-                        fontWeight = FontWeight.Light,
-                        color = Color.White.copy(alpha = 0.95f)
-                    )
-                    Text(
-                        text = "Sunday, Nov 8",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                // Bottom: Search Bar & App Dock
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Search pill
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.92f)
-                            .height(30.dp)
-                            .clip(RoundedCornerShape(15.dp))
-                            .background(Color.White.copy(alpha = 0.28f)),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.8f)))
-                            Text("Search", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.9f))
-                        }
-                    }
-
-                    // App Dock (4 mock app icons)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(0.92f),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        repeat(4) {
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.35f))
-                            )
-                        }
-                    }
                 }
             }
         }

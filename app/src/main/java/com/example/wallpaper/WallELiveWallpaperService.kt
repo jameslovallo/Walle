@@ -51,12 +51,12 @@ class WallELiveWallpaperService : WallpaperService() {
         private var isNsfwMode: Boolean = false
         private var activeFilters: ModeFilterSettings = ModeFilterSettings()
 
-        // Slide transition state when wallpaper changes
+        // Fade transition state when wallpaper changes
         private var previousBitmap: Bitmap? = null
         private var previousOffset: Float = 0.5f
-        private var slideAnimStartTime = 0L
-        private var isSlideAnimating = false
-        private val slideAnimDuration = 600L // Under 750ms as requested
+        private var fadeAnimStartTime = 0L
+        private var isFadeAnimating = false
+        private val fadeAnimDuration = 650L // Smooth, seamless crossfade
 
         // Double tap & long press gesture detection state
         private var lastTapTime = 0L
@@ -87,10 +87,10 @@ class WallELiveWallpaperService : WallpaperService() {
                 var shouldContinue = false
                 val now = SystemClock.uptimeMillis()
 
-                if (isSlideAnimating) {
-                    val elapsed = now - slideAnimStartTime
-                    if (elapsed >= slideAnimDuration) {
-                        isSlideAnimating = false
+                if (isFadeAnimating) {
+                    val elapsed = now - fadeAnimStartTime
+                    if (elapsed >= fadeAnimDuration) {
+                        isFadeAnimating = false
                         previousBitmap = null
                     } else {
                         shouldContinue = true
@@ -137,7 +137,7 @@ class WallELiveWallpaperService : WallpaperService() {
         override fun onDestroy() {
             super.onDestroy()
             isFeedbackAnimating = false
-            isSlideAnimating = false
+            isFadeAnimating = false
             animHandler.removeCallbacks(animRunnable)
             animHandler.removeCallbacks(longPressRunnable)
             try {
@@ -234,13 +234,13 @@ class WallELiveWallpaperService : WallpaperService() {
                     if (nextBmp != null) {
                         withContext(Dispatchers.Main) {
                             if (currentBitmap != null) {
-                                // Slide transition: old image slides left, new image slides in from the right
+                                // Seamless crossfade transition between wallpapers
                                 previousBitmap = currentBitmap
                                 previousOffset = currentInfo?.horizontalOffset ?: 0.5f
                                 currentBitmap = nextBmp
                                 currentInfo = newInfo
-                                slideAnimStartTime = SystemClock.uptimeMillis()
-                                isSlideAnimating = true
+                                fadeAnimStartTime = SystemClock.uptimeMillis()
+                                isFadeAnimating = true
                                 animHandler.removeCallbacks(animRunnable)
                                 animHandler.post(animRunnable)
                             } else {
@@ -354,10 +354,10 @@ class WallELiveWallpaperService : WallpaperService() {
                     if (bmp != null) {
                         val offset = currentInfo?.horizontalOffset ?: 0.5f
 
-                        if (isSlideAnimating) {
-                            val elapsed = SystemClock.uptimeMillis() - slideAnimStartTime
-                            val progress = (elapsed.toFloat() / slideAnimDuration.toFloat()).coerceIn(0f, 1f)
-                            WallpaperRenderHelper.renderWallpaperSlideTransitionToCanvas(
+                        if (isFadeAnimating) {
+                            val elapsed = SystemClock.uptimeMillis() - fadeAnimStartTime
+                            val progress = (elapsed.toFloat() / fadeAnimDuration.toFloat()).coerceIn(0f, 1f)
+                            WallpaperRenderHelper.renderWallpaperFadeTransitionToCanvas(
                                 canvas = canvas,
                                 oldBitmap = previousBitmap,
                                 oldOffset = previousOffset,

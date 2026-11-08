@@ -26,12 +26,16 @@ object WallpaperRenderHelper {
         screenWidth: Int,
         screenHeight: Int,
         horizontalOffset: Float,
-        filters: ModeFilterSettings
+        filters: ModeFilterSettings,
+        alphaMultiplier: Float = 1.0f,
+        clearBackground: Boolean = true
     ) {
         if (screenWidth <= 0 || screenHeight <= 0) return
 
         // Fill background with black so opacity brightness works as requested
-        canvas.drawColor(Color.BLACK)
+        if (clearBackground) {
+            canvas.drawColor(Color.BLACK)
+        }
 
         val bWidth = bitmap.width.toFloat()
         val bHeight = bitmap.height.toFloat()
@@ -55,9 +59,10 @@ object WallpaperRenderHelper {
 
         val dstRect = Rect(0, 0, screenWidth, screenHeight)
 
-        // Setup Paint with Brightness (opacity over black) and Grayscale
+        // Setup Paint with Brightness (opacity over black), Grayscale, and transition alpha multiplier
+        val combinedAlpha = (filters.brightness.coerceIn(0f, 1f) * alphaMultiplier.coerceIn(0f, 1f) * 255).toInt()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-            alpha = (filters.brightness.coerceIn(0f, 1f) * 255).toInt()
+            alpha = combinedAlpha
         }
 
         if (filters.grayscale > 0.01f) {
@@ -105,10 +110,10 @@ object WallpaperRenderHelper {
     }
 
     /**
-     * Renders a slide transition where the new image slides in from the right over/alongside the old image.
-     * progress: 0f (start) to 1f (complete).
+     * Renders a seamless, attractive crossfade transition between wallpapers on the home screen.
+     * progress: 0f (start, old image fully visible) to 1f (end, new image fully visible).
      */
-    fun renderWallpaperSlideTransitionToCanvas(
+    fun renderWallpaperFadeTransitionToCanvas(
         canvas: Canvas,
         oldBitmap: Bitmap?,
         oldOffset: Float,
@@ -122,35 +127,35 @@ object WallpaperRenderHelper {
         if (screenWidth <= 0 || screenHeight <= 0) return
         val clampedProgress = progress.coerceIn(0f, 1f)
 
-        // Draw old wallpaper translating left: x = -progress * screenWidth
-        if (oldBitmap != null && clampedProgress < 1f) {
-            canvas.save()
-            canvas.translate(-clampedProgress * screenWidth, 0f)
+        // Draw base: either old wallpaper with (1 - progress) alpha or solid background
+        if (oldBitmap != null) {
             renderWallpaperToCanvas(
                 canvas = canvas,
                 bitmap = oldBitmap,
                 screenWidth = screenWidth,
                 screenHeight = screenHeight,
                 horizontalOffset = oldOffset,
-                filters = filters
+                filters = filters,
+                alphaMultiplier = 1.0f - clampedProgress,
+                clearBackground = true
             )
-            canvas.restore()
-        } else if (oldBitmap == null) {
+        } else {
             canvas.drawColor(Color.BLACK)
         }
 
-        // Draw new wallpaper sliding in from the right: x = (1.0f - progress) * screenWidth
-        canvas.save()
-        canvas.translate((1.0f - clampedProgress) * screenWidth, 0f)
-        renderWallpaperToCanvas(
-            canvas = canvas,
-            bitmap = newBitmap,
-            screenWidth = screenWidth,
-            screenHeight = screenHeight,
-            horizontalOffset = newOffset,
-            filters = filters
-        )
-        canvas.restore()
+        // Draw new wallpaper on top with progress alpha, without clearing background
+        if (clampedProgress > 0f) {
+            renderWallpaperToCanvas(
+                canvas = canvas,
+                bitmap = newBitmap,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                horizontalOffset = newOffset,
+                filters = filters,
+                alphaMultiplier = clampedProgress,
+                clearBackground = false
+            )
+        }
     }
 
     enum class FeedbackIconType {
