@@ -10,7 +10,6 @@ import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -22,13 +21,20 @@ object ImageCompressionHelper {
 
     /**
      * Optimizes an image file: caps dimensions at 4K max and encodes as WebP.
-     * Overwrites the target document file. Attempts to rename non-WebP files to .webp.
-     * Returns true if optimization was performed and saved successfully.
+     *
+     * Replacement semantics: the original file's bytes are replaced in place
+     * when the file is already `.webp`, or a sibling `.webp` file is written
+     * and the original is deleted. An in-place overwrite + rename is used as
+     * fallback when a sibling cannot be created.
+     *
+     * @return the optimized `.webp` [DocumentFile] on success, or null on
+     * failure. Callers must only mark the image as optimized on non-null.
      */
     suspend fun optimizeDocumentFile(
         context: Context,
-        docFile: DocumentFile
-    ): Boolean = withContext(Dispatchers.IO) {
+        docFile: DocumentFile,
+        parentDir: DocumentFile? = null
+    ): DocumentFile? = withContext(Dispatchers.IO) {
         val maxDims = MAX_4K_DIMS
         val uri = docFile.uri
 
@@ -37,11 +43,11 @@ object ImageCompressionHelper {
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, options)
-            } ?: return@withContext false
+            } ?: return@withContext null
 
             val origWidth = options.outWidth
             val origHeight = options.outHeight
-            if (origWidth <= 0 || origHeight <= 0) return@withContext false
+            if (origWidth <= 0 || origHeight <= 0) return@withContext null
 
             val maxLongSide = maxDims.first
             val maxShortSide = maxDims.second
@@ -67,7 +73,7 @@ object ImageCompressionHelper {
 
             val decodedBitmap = context.contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, decodeOptions)
-            } ?: return@withContext false
+            } ?: return@withContext null
 
             // Precise scaling if still larger than target bounds
             var finalBitmap = decodedBitmap
@@ -98,30 +104,70 @@ object ImageCompressionHelper {
             bos.close()
             finalBitmap.recycle()
 
-            // Write back to the document file (always encoded as WebP, capped at 4K)
-            if (compressedBytes.isNotEmpty()) {
-                context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
-                    out.write(compressedBytes)
-                    out.flush()
-                }
-                // Ensure the file has a .webp extension for clarity/correct format
-                try {
-                    val currentName = docFile.name
-                    if (currentName != null && !currentName.lowercase().endsWith(".webp")) {
-                        val base = currentName.substringBeforeLast('.')
-                        if (base.isNotBlank()) {
-                            docFile.renameTo("$base.webp")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Optimized ${docFile.name} but could not rename to .webp", e)
-                }
-                return@withContext true
+            if (compressedBytes.isEmpty()) return@withContext null
+
+            val currentName = docFile.name ?: return@withContext null
+            if (currentName.lowercase().endsWith(".webp")) {
+                // Already a .webp file: replace bytes in place.
+                return@withContext if (writeBytes(context, uri, compressedBytes)) docFile else null
             }
 
-            false
+            val base = currentName.substringBeforeLast('.')
+            if (base.isBlank()) return@withContext null
+            val targetName = "$base.webp"
+
+            // Preferred path: write a sibling .webp and delete the original.
+            val parent = parentDir ?: docFile.parentFile
+            if (parent != null && parent.exists()) {
+                try {
+                    val webpFile = parent.findFile(targetName)
+                        ?: parent.createFile("image/webp", targetName)
+                    if (webpFile != null && writeBytes(context, webpFile.uri, compressedBytes)) {
+                        val deleted = try {
+                            docFile.delete()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not delete original ${docFile.name}", e)
+                            false
+                        }
+                        if (deleted) {
+                            return@withContext webpFile
+                        }
+                        if (webpFile.uri == uri) {
+                            // Provider rewrote in place despite existing check.
+                            return@withContext webpFile
+                        }
+                        Log.w(TAG, "Wrote $targetName but could not delete original ${docFile.name}; will retry")
+                        return@withContext null
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Sibling replacement failed for ${docFile.name}, falling back to in-place", e)
+                }
+            }
+
+            // Fallback: replace bytes in place, then try to rename to .webp.
+            if (!writeBytes(context, uri, compressedBytes)) return@withContext null
+            try {
+                docFile.renameTo(targetName)
+            } catch (e: Exception) {
+                Log.w(TAG, "Optimized ${docFile.name} but could not rename to .webp", e)
+            }
+            docFile
         } catch (e: Exception) {
             Log.e(TAG, "Error optimizing document file: ${docFile.name}", e)
+            null
+        }
+    }
+
+    private fun writeBytes(context: Context, targetUri: Uri, bytes: ByteArray): Boolean {
+        return try {
+            val out = context.contentResolver.openOutputStream(targetUri, "wt") ?: return false
+            out.use {
+                it.write(bytes)
+                it.flush()
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error writing optimized bytes", e)
             false
         }
     }

@@ -488,6 +488,39 @@ class WallpaperRepository(
         }
     }
 
+    private fun hasWebPMagic(file: DocumentFile): Boolean {
+        val header = ByteArray(12)
+        var read = 0
+        return try {
+            context.contentResolver.openInputStream(file.uri)?.use { input ->
+                while (read < header.size) {
+                    val n = input.read(header, read, header.size - read)
+                    if (n <= 0) break
+                    read += n
+                }
+            }
+            read >= 12 &&
+                header[0] == 'R'.code.toByte() && header[1] == 'I'.code.toByte() &&
+                header[2] == 'F'.code.toByte() && header[3] == 'F'.code.toByte() &&
+                header[8] == 'W'.code.toByte() && header[9] == 'E'.code.toByte() &&
+                header[10] == 'B'.code.toByte() && header[11] == 'P'.code.toByte()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * A file counts as optimized only if it was marked after a successful
+     * write and its bytes are actually WebP. This heals previous false
+     * positives where a failed attempt was marked optimized but the large
+     * original file remained.
+     */
+    private fun isFileOptimized(file: DocumentFile, id: String, optimizedIds: Set<String>): Boolean {
+        if (id !in optimizedIds) return false
+        if (file.name?.lowercase()?.endsWith(".webp") == true) return true
+        return hasWebPMagic(file)
+    }
+
     /**
      * Refreshes optimization progress by scanning the configured library folder.
      */
@@ -504,20 +537,21 @@ class WallpaperRepository(
                 return@withContext
             }
             val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
-            val allIds = mutableSetOf<String>()
+            val files = mutableListOf<Pair<DocumentFile, String>>()
             val subfolders = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
             for (subDir in subfolders) {
                 if (!subDir.exists() || !subDir.isDirectory) continue
                 for (file in subDir.listFiles()) {
                     if (file.isDirectory) continue
-                    val id = imageIdFromFileName(file.name ?: continue) ?: continue
-                    allIds.add(id)
+                    val name = file.name ?: continue
+                    val id = imageIdFromFileName(name) ?: continue
+                    files.add(file to id)
                 }
             }
-            val optimizedCount = allIds.count { it in optimizedIds }
+            val optimizedCount = files.count { (file, id) -> isFileOptimized(file, id, optimizedIds) }
             _optimizationProgress.value = _optimizationProgress.value.copy(
                 optimized = optimizedCount,
-                total = allIds.size
+                total = files.size
             )
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error refreshing optimization progress", e)
@@ -547,41 +581,52 @@ class WallpaperRepository(
 
                 val optimizedIds = preferences.optimizedWallpaperIdsFlow.first().toMutableSet()
 
-                // Collect all image files with their IDs
-                data class PendingFile(val file: DocumentFile, val id: String)
+                // Collect every image file in the library so duplicates and
+                // previously mis-marked large originals are revisited.
+                data class PendingFile(val file: DocumentFile, val id: String, val parentDir: DocumentFile)
                 val allFiles = mutableListOf<PendingFile>()
-                val seenIds = mutableSetOf<String>()
                 val subfolders = listOfNotNull(rootDoc.findFile("sfw"), rootDoc.findFile("nsfw"), rootDoc)
                 for (subDir in subfolders) {
                     if (!subDir.exists() || !subDir.isDirectory) continue
                     for (file in subDir.listFiles()) {
                         if (file.isDirectory) continue
                         val id = imageIdFromFileName(file.name ?: continue) ?: continue
-                        if (seenIds.add(id)) {
-                            allFiles.add(PendingFile(file, id))
-                        }
+                        allFiles.add(PendingFile(file, id, subDir))
                     }
                 }
 
-                var optimizedCount = allFiles.count { it.id in optimizedIds }
+                var optimizedCount = allFiles.count { isFileOptimized(it.file, it.id, optimizedIds) }
                 _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true)
 
                 for (item in allFiles) {
-                    if (item.id in optimizedIds) continue
-                    try {
+                    if (isFileOptimized(item.file, item.id, optimizedIds)) continue
+                    val optimizedFile = try {
                         com.example.util.ImageCompressionHelper.optimizeDocumentFile(
                             context = context,
-                            docFile = item.file
+                            docFile = item.file,
+                            parentDir = item.parentDir
                         )
                     } catch (e: Exception) {
                         Log.e("WallpaperRepo", "Error optimizing ${item.file.name}", e)
+                        null
                     }
-                    // Mark as optimized even if the helper had issues, to avoid infinite retries on bad files;
-                    // the file was attempted and we keep progress moving. (If write failed, we still mark to prevent loop;
-                    // this is a pragmatic choice - could be refined, but "keep compressing until all files optimized" means progress.)
-                    optimizedIds.add(item.id)
-                    preferences.markWallpaperOptimized(item.id)
-                    optimizedCount = allFiles.count { it.id in optimizedIds }
+                    if (optimizedFile != null) {
+                        optimizedIds.add(item.id)
+                        preferences.markWallpaperOptimized(item.id)
+                        // Point the DB at the replaced .webp file so later
+                        // face-detection / sync does not hit a deleted URI.
+                        try {
+                            if (favoriteDao.isFavoriteDirect(item.id)) {
+                                favoriteDao.updateLocalFilePath(item.id, optimizedFile.uri.toString())
+                            }
+                        } catch (e: Exception) {
+                            Log.e("WallpaperRepo", "Error updating local path for ${item.id}", e)
+                        }
+                        optimizedCount += 1
+                    } else {
+                        // Leave unmarked so the file is retried on the next run.
+                        Log.w("WallpaperRepo", "Optimization did not complete for ${item.file.name}; will retry")
+                    }
                     _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true)
                 }
 
@@ -598,19 +643,39 @@ class WallpaperRepository(
 
     /**
      * Optimizes a single saved wallpaper file in the background (4K max, WebP format).
+     * Only marks as optimized after the WebP replacement actually succeeds.
      */
-    suspend fun optimizeSingleWallpaperFile(targetFile: DocumentFile, id: String) = withContext(Dispatchers.IO) {
-        try {
-            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
-            if (id in optimizedIds) return@withContext
-            com.example.util.ImageCompressionHelper.optimizeDocumentFile(
-                context = context,
-                docFile = targetFile
-            )
-            preferences.markWallpaperOptimized(id)
-            refreshOptimizationProgress()
-        } catch (e: Exception) {
-            Log.e("WallpaperRepo", "Error optimizing single wallpaper $id", e)
+    suspend fun optimizeSingleWallpaperFile(
+        targetFile: DocumentFile,
+        id: String,
+        parentDir: DocumentFile? = null
+    ) = withContext(Dispatchers.IO) {
+        optimizationMutex.withLock {
+            try {
+                val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
+                if (isFileOptimized(targetFile, id, optimizedIds)) {
+                    refreshOptimizationProgress()
+                    return@withLock
+                }
+                val optimizedFile = com.example.util.ImageCompressionHelper.optimizeDocumentFile(
+                    context = context,
+                    docFile = targetFile,
+                    parentDir = parentDir ?: targetFile.parentFile
+                )
+                if (optimizedFile != null) {
+                    preferences.markWallpaperOptimized(id)
+                    try {
+                        if (favoriteDao.isFavoriteDirect(id)) {
+                            favoriteDao.updateLocalFilePath(id, optimizedFile.uri.toString())
+                        }
+                    } catch (e: Exception) {
+                        Log.e("WallpaperRepo", "Error updating local path for $id", e)
+                    }
+                }
+                refreshOptimizationProgress()
+            } catch (e: Exception) {
+                Log.e("WallpaperRepo", "Error optimizing single wallpaper $id", e)
+            }
         }
     }
 
@@ -1384,14 +1449,22 @@ class WallpaperRepository(
                 }
             }
 
-            // Determine extension (.png or .jpg) from url
-            val isPng = fav.url.endsWith(".png", ignoreCase = true)
-            val extension = if (isPng) ".png" else ".jpg"
-            val mimeType = if (isPng) "image/png" else "image/jpeg"
-            val fileName = "${fav.id}$extension"
-
-            var targetFile = subDir.findFile(fileName)
+            // Reuse an existing library file for this ID in any image
+            // extension (including an already-optimized .webp) instead of
+            // downloading a second large original next to it.
+            var targetFile = subDir.listFiles().firstOrNull { f ->
+                if (f.isDirectory) false
+                else {
+                    val fName = f.name ?: return@firstOrNull false
+                    imageIdFromFileName(fName) == fav.id
+                }
+            }
             if (targetFile == null) {
+                // Determine extension (.png or .jpg) from url
+                val isPng = fav.url.endsWith(".png", ignoreCase = true)
+                val extension = if (isPng) ".png" else ".jpg"
+                val mimeType = if (isPng) "image/png" else "image/jpeg"
+                val fileName = "${fav.id}$extension"
                 targetFile = subDir.createFile(mimeType, fileName)
                 if (targetFile != null) {
                     // Stream the original untouched full-resolution file from wallhaven
@@ -1418,11 +1491,13 @@ class WallpaperRepository(
             // Update metadata index.json in the root folder
             updateFolderMetadataIndex(rootDoc)
 
-            // Optimize newly saved wallpaper in background (4K max, WebP) by default
+            // Optimize newly saved wallpaper in background (4K max, WebP) by
+            // default. This covers favorites added from Discover, since
+            // toggleFavorite() funnels through saveWallpaperToLocalFolder().
             val savedFile = targetFile
             if (savedFile != null) {
                 CoroutineScope(Dispatchers.IO).launch {
-                    optimizeSingleWallpaperFile(savedFile, fav.id)
+                    optimizeSingleWallpaperFile(savedFile, fav.id, subDir)
                     compressUnoptimizedWallpapers()
                 }
             } else {

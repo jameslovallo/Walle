@@ -39,6 +39,9 @@ interface FavoriteDao {
     @Query("UPDATE favorite_wallpapers SET horizontalOffset = :offset WHERE id = :id")
     suspend fun updateCropOffset(id: String, offset: Float)
 
+    @Query("UPDATE favorite_wallpapers SET localFilePath = :path WHERE id = :id")
+    suspend fun updateLocalFilePath(id: String, path: String)
+
     @Query("SELECT id FROM favorite_wallpapers")
     suspend fun getAllFavoriteIds(): List<String>
 }
