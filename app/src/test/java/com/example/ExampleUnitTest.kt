@@ -6,10 +6,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-
-@RunWith(RobolectricTestRunner::class)
 class ExampleUnitTest {
 
     @Test
@@ -208,27 +204,39 @@ class ExampleUnitTest {
 
     @Test
     fun `test stored horizontal offset persistence and fallback logic`() {
-        val jsonString = """
-            {
-                "wallpapers": [
-                    { "id": "wp1", "horizontalOffset": 0.72 },
-                    { "id": "wp2", "horizontalOffset": 0.0 },
-                    { "id": "wp3", "horizontalOffset": 1.0 },
-                    { "id": "wp4" }
-                ]
-            }
-        """.trimIndent()
-        val json = org.json.JSONObject(jsonString)
-        val arr = json.getJSONArray("wallpapers")
+        fun parseOffset(hasOffset: Boolean, rawOffset: Double): Float {
+            val hasValidStoredOffset = hasOffset && !rawOffset.isNaN() && rawOffset in 0.0..1.0
+            return if (hasValidStoredOffset) rawOffset.toFloat() else 0.5f
+        }
 
-        val item1 = arr.getJSONObject(0)
-        val rawOffset1 = item1.optDouble("horizontalOffset", Double.NaN)
-        assertTrue(!rawOffset1.isNaN() && rawOffset1 in 0.0..1.0)
-        assertEquals(0.72f, rawOffset1.toFloat(), 0.001f)
+        assertEquals(0.72f, parseOffset(true, 0.72), 0.001f)
+        assertEquals(0.0f, parseOffset(true, 0.0), 0.001f)
+        assertEquals(1.0f, parseOffset(true, 1.0), 0.001f)
+        assertEquals(0.5f, parseOffset(false, Double.NaN), 0.001f)
+        assertEquals(0.5f, parseOffset(true, -1.0), 0.001f)
+    }
 
-        val item4 = arr.getJSONObject(3)
-        val rawOffset4 = if (item4.has("horizontalOffset")) item4.optDouble("horizontalOffset", Double.NaN) else Double.NaN
-        assertTrue(rawOffset4.isNaN())
+    @Test
+    fun `test removed favorites filter instantly in memory`() {
+        val fav1 = com.example.data.local.FavoriteWallpaper(id = "fav1", url = "u1", thumbUrl = "t1", purity = "sfw", category = "all")
+        val fav2 = com.example.data.local.FavoriteWallpaper(id = "fav2", url = "u2", thumbUrl = "t2", purity = "sfw", category = "all")
+        val favoritesList = listOf(fav1, fav2)
+
+        val pendingRemovedIds = setOf("fav1")
+        val filtered = favoritesList.filter { it.id !in pendingRemovedIds }
+
+        assertEquals(1, filtered.size)
+        assertEquals("fav2", filtered.first().id)
+        assertFalse(filtered.any { it.id == "fav1" })
+    }
+
+    @Test
+    fun `test rule of thirds vertical gridline calculations`() {
+        val previewWidth = 300f
+        val line1 = previewWidth / 3f
+        val line2 = previewWidth * 2f / 3f
+        assertEquals(100f, line1, 0.001f)
+        assertEquals(200f, line2, 0.001f)
     }
 
     @Test

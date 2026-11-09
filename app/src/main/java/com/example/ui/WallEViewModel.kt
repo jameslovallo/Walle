@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -58,7 +59,8 @@ data class WallEUIState(
     val optimizationTotal: Int = 0,
     val isOptimizingLibrary: Boolean = false,
     val optimizationFailed: Int = 0,
-    val optimizationLastError: String = ""
+    val optimizationLastError: String = "",
+    val isCalculatingAiOffset: Boolean = false
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -69,8 +71,13 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     val isNsfwMode = repository.isNsfwMode.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val favorites: StateFlow<List<FavoriteWallpaper>> = isNsfwMode.flatMapLatest { nsfw ->
-        repository.getFavorites(nsfw)
+    private val _pendingRemovedFavoriteIds = MutableStateFlow<Set<String>>(emptySet())
+
+    val favorites: StateFlow<List<FavoriteWallpaper>> = combine(
+        isNsfwMode.flatMapLatest { nsfw -> repository.getFavorites(nsfw) },
+        _pendingRemovedFavoriteIds
+    ) { favList, removedIds ->
+        if (removedIds.isEmpty()) favList else favList.filter { it.id !in removedIds }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _uiState = MutableStateFlow(WallEUIState())
@@ -381,6 +388,9 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleFavoriteWallpaper(wallpaper: Wallpaper) {
+        if (wallpaper.isFavorite) {
+            _pendingRemovedFavoriteIds.value = _pendingRemovedFavoriteIds.value + wallpaper.id
+        }
         viewModelScope.launch {
             val newFavStatus = repository.toggleFavorite(
                 id = wallpaper.id,
@@ -463,6 +473,9 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleCurrentFavorite() {
         val current = _uiState.value.currentWallpaper
         if (current.id.isBlank()) return
+        if (_uiState.value.isCurrentFavorite) {
+            _pendingRemovedFavoriteIds.value = _pendingRemovedFavoriteIds.value + current.id
+        }
         viewModelScope.launch {
             repository.toggleFavorite(
                 id = current.id,
@@ -477,8 +490,29 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteFavorite(id: String) {
+        if (id.isBlank()) return
+        // Instantly drop from the in-memory favorites list so the grid updates in 0ms
+        _pendingRemovedFavoriteIds.value = _pendingRemovedFavoriteIds.value + id
         viewModelScope.launch {
             repository.deleteFavorite(id)
+        }
+    }
+
+    fun recalculateCurrentWallpaperAIPositioning() {
+        val current = _uiState.value.currentWallpaper
+        if (current.id.isBlank()) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isCalculatingAiOffset = true)
+            try {
+                val fav = repository.getFavoriteById(current.id)
+                val source = fav?.localFilePath ?: current.url.ifBlank { current.thumbUrl }
+                val detected = repository.detectFaceOffset(source)
+                updateCurrentWallpaperOffset(detected)
+            } catch (e: Exception) {
+                android.util.Log.e("WallEViewModel", "Error recalculating AI positioning for ${current.id}", e)
+            } finally {
+                _uiState.value = _uiState.value.copy(isCalculatingAiOffset = false)
+            }
         }
     }
 

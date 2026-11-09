@@ -321,6 +321,14 @@ class AppPreferences(private val context: Context) {
         }
     }
 
+    suspend fun removeOptimizedWallpaperId(id: String) {
+        if (id.isBlank()) return
+        context.dataStore.edit {
+            val current = it[KEY_OPTIMIZED_WALLPAPER_IDS] ?: emptySet()
+            it[KEY_OPTIMIZED_WALLPAPER_IDS] = current - id
+        }
+    }
+
     suspend fun clearOptimizedWallpapers() {
         context.dataStore.edit {
             it[KEY_OPTIMIZED_WALLPAPER_IDS] = emptySet()

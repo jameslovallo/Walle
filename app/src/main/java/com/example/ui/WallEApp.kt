@@ -2,6 +2,7 @@ package com.example.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -55,6 +57,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -66,6 +69,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -243,6 +247,7 @@ fun WallEApp(
                 currentWallpaper = uiState.currentWallpaper,
                 isFavorite = uiState.isCurrentFavorite,
                 isPaused = uiState.isSlideshowPaused,
+                isCalculatingAiOffset = uiState.isCalculatingAiOffset,
                 onDismiss = { showCurrentFavoriteModal = false },
                 onUnfavorite = { viewModel.toggleCurrentFavorite() },
                 onPlayPauseToggle = { viewModel.togglePlayPause() },
@@ -255,6 +260,9 @@ fun WallEApp(
                     showCurrentFavoriteModal = false
                     selectedTabIndex = 1
                     viewModel.searchSimilar(wallpaperId)
+                },
+                onAiPositionClick = {
+                    viewModel.recalculateCurrentWallpaperAIPositioning()
                 }
             )
         }
@@ -266,13 +274,15 @@ fun CurrentFavoriteModalContent(
     currentWallpaper: CurrentWallpaperInfo,
     isFavorite: Boolean,
     isPaused: Boolean,
+    isCalculatingAiOffset: Boolean = false,
     onDismiss: () -> Unit,
     onUnfavorite: () -> Unit,
     onPlayPauseToggle: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
     onDragOffsetChanged: (Float) -> Unit,
-    onFindSimilar: (String) -> Unit
+    onFindSimilar: (String) -> Unit,
+    onAiPositionClick: () -> Unit = {}
 ) {
     val displayMetrics = LocalContext.current.resources.displayMetrics
     val deviceAspect = if (displayMetrics.heightPixels > 0) {
@@ -283,6 +293,10 @@ fun CurrentFavoriteModalContent(
 
     var localOffset by remember(currentWallpaper.id, currentWallpaper.horizontalOffset) {
         mutableFloatStateOf(currentWallpaper.horizontalOffset)
+    }
+
+    LaunchedEffect(currentWallpaper.horizontalOffset) {
+        localOffset = currentWallpaper.horizontalOffset
     }
 
     Column(
@@ -366,6 +380,67 @@ fun CurrentFavoriteModalContent(
                     )
                 } else {
                     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF1E1E24)))
+                }
+            }
+
+            // Vertical gridline overlay at 1/3 and 2/3 of preview width (white with partial transparency)
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("modal_repositioning_gridlines")
+            ) {
+                val oneThirdX = size.width / 3f
+                val twoThirdsX = size.width * 2f / 3f
+                val strokeW = 1.5.dp.toPx()
+                val gridlineColor = Color.White.copy(alpha = 0.40f)
+
+                // 1/3 vertical line
+                drawLine(
+                    color = gridlineColor,
+                    start = Offset(oneThirdX, 0f),
+                    end = Offset(oneThirdX, size.height),
+                    strokeWidth = strokeW
+                )
+
+                // 2/3 vertical line
+                drawLine(
+                    color = gridlineColor,
+                    start = Offset(twoThirdsX, 0f),
+                    end = Offset(twoThirdsX, size.height),
+                    strokeWidth = strokeW
+                )
+            }
+
+            // AI positioning icon button at the bottom center of the bottom right corner of the image
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(1f / 3f)
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                IconButton(
+                    onClick = onAiPositionClick,
+                    enabled = !isCalculatingAiOffset,
+                    modifier = Modifier
+                        .size(42.dp)
+                        .background(Color.Black.copy(alpha = 0.60f), CircleShape)
+                        .testTag("modal_ai_positioning_button")
+                ) {
+                    if (isCalculatingAiOffset) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Apply AI Positioning",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
         }
