@@ -344,7 +344,9 @@ class WallpaperRepository(
                     val folderUri = Uri.parse(folderUriString)
                     val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
                     if (rootDoc != null && rootDoc.exists() && rootDoc.canWrite()) {
-                        updateFolderMetadataIndex(rootDoc)
+                        folderMutex.withLock {
+                            updateFolderMetadataIndex(rootDoc)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e("WallpaperRepo", "Error updating index.json on offset update", e)
@@ -765,12 +767,13 @@ class WallpaperRepository(
                         }
                         _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
                     }
-                    try {
-                        val rootDocForIndex = DocumentFile.fromTreeUri(context, Uri.parse(folderUriString))
-                        if (rootDocForIndex != null) updateFolderMetadataIndex(rootDocForIndex)
-                    } catch (e: Exception) {
-                        Log.w("WallpaperRepo", "Could not update index.json after File optimization", e)
-                    }
+                    // Do NOT rewrite index.json here: the compressor runs
+                    // concurrently with folder load (syncAndLoadFromSelectedFolder)
+                    // and Vision init, and a stale DB snapshot would clobber
+                    // valid horizontalOffset values stored in index.json.
+                    // The optimized flag is refreshed on the next folder sync
+                    // (and on every save/delete/offset update) via
+                    // updateFolderMetadataIndex, which preserves offsets.
                     _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false, failedCount, lastErrorMsg)
                     return@withLock
                 }
@@ -854,8 +857,10 @@ class WallpaperRepository(
                     _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
                 }
 
-                // Update metadata index.json with optimized status
-                updateFolderMetadataIndex(rootDoc)
+                // Do NOT rewrite index.json here (see File-path branch above):
+                // a concurrent compress pass must never overwrite the
+                // horizontalOffset values that folder load just restored from
+                // index.json. Optimized status is picked up on next sync.
                 _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false, failedCount, lastErrorMsg)
             } catch (e: CancellationException) {
                 throw e
@@ -1545,9 +1550,20 @@ class WallpaperRepository(
                     if (cached != null) {
                         cached
                     } else {
-                        val localUriStr = localFileInfo?.first?.uri?.toString() ?: ""
-                        unpositionedItems.add(id to localUriStr)
-                        0.5f
+                        // Fall back to the existing DB row before treating the
+                        // item as unpositioned. Without this, a re-sync after
+                        // the cache was cleared would overwrite a DB offset
+                        // that is otherwise valid with 0.5 + face re-detection.
+                        val existingFav = favoriteDao.getFavoriteById(id)
+                        val dbOffset = existingFav?.horizontalOffset
+                        if (dbOffset != null && dbOffset in 0f..1f) {
+                            setCachedOffset(id, dbOffset)
+                            dbOffset
+                        } else {
+                            val localUriStr = localFileInfo?.first?.uri?.toString() ?: ""
+                            unpositionedItems.add(id to localUriStr)
+                            0.5f
+                        }
                     }
                 }
 
@@ -1602,7 +1618,12 @@ class WallpaperRepository(
                                 sourceUrl = fav.url
                             )
                             if (internalThumb.isNotBlank() && internalThumb != fav.thumbUrl) {
-                                favoriteDao.insertFavorite(fav.copy(thumbUrl = internalThumb))
+                                // Targeted UPDATE only: the snapshot `fav` may be
+                                // stale by now (user drag / face detection may have
+                                // updated the offset). A REPLACE would overwrite the
+                                // DB row with the stale horizontalOffset. UPDATE
+                                // also avoids resurrecting a deleted favorite.
+                                favoriteDao.updateThumbUrl(fav.id, internalThumb)
                             }
                         }
                     } catch (e: Exception) {
@@ -1711,11 +1732,19 @@ class WallpaperRepository(
                 sourceUrl = fav.url
             )
             if (internalThumb.isNotBlank() && internalThumb != fav.thumbUrl) {
-                favoriteDao.insertFavorite(fav.copy(thumbUrl = internalThumb, localFilePath = targetFile?.uri?.toString()))
+                // Targeted UPDATE preserves any offset updated after the
+                // caller snapshot was taken (see sync thumbnail branch).
+                favoriteDao.updateThumbUrlAndLocalPath(
+                    fav.id,
+                    internalThumb,
+                    targetFile?.uri?.toString()
+                )
             }
 
             // Update metadata index.json in the root folder
-            updateFolderMetadataIndex(rootDoc)
+            folderMutex.withLock {
+                updateFolderMetadataIndex(rootDoc)
+            }
 
             // Optimize newly saved wallpaper in background (4K max, WebP) by
             // default. This covers favorites added from Discover, since
@@ -1741,6 +1770,41 @@ class WallpaperRepository(
                 indexFile = rootDoc.createFile("application/json", "index.json") ?: return
             }
 
+            // Read back the offsets currently stored on disk so a stale or
+            // placeholder DB row can never overwrite a valid index value.
+            // Priority is cached (most-recent intentional/detected value)
+            // > existing index.json (source of truth on folder load)
+            // > DB row > 0.5. Previously the DB row always won because its
+            // 0.5 default is in 0f..1f, which made the cached-offset fallback
+            // dead code and reset user-edited index offsets to 0.5 whenever
+            // this ran concurrently with folder load.
+            val existingOffsets = mutableMapOf<String, Float>()
+            try {
+                if (indexFile.exists()) {
+                    val jsonString = context.contentResolver.openInputStream(indexFile.uri)?.use { stream ->
+                        stream.bufferedReader().use { it.readText() }
+                    }
+                    if (!jsonString.isNullOrBlank()) {
+                        val existingRoot = JSONObject(jsonString)
+                        val existingArray = existingRoot.optJSONArray("wallpapers")
+                        if (existingArray != null) {
+                            for (i in 0 until existingArray.length()) {
+                                val existingItem = existingArray.getJSONObject(i)
+                                val existingId = existingItem.optString("id")
+                                if (existingId.isNotBlank() && existingItem.has("horizontalOffset")) {
+                                    val raw = existingItem.optDouble("horizontalOffset", Double.NaN)
+                                    if (!raw.isNaN() && raw in 0.0..1.0) {
+                                        existingOffsets[existingId] = raw.toFloat()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("WallpaperRepo", "Could not read existing index.json offsets before updating", e)
+            }
+
             val allFavs = favoriteDao.getAllFavoriteIds()
             val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
             val jsonArray = JSONArray()
@@ -1750,11 +1814,10 @@ class WallpaperRepository(
                     put("id", fav.id)
                     put("purity", fav.purity)
                     put("category", fav.category)
-                    val offsetToPersist = if (fav.horizontalOffset in 0f..1f) {
-                        fav.horizontalOffset
-                    } else {
-                        getCachedOffset(fav.id) ?: 0.5f
-                    }
+                    val offsetToPersist = getCachedOffset(fav.id)
+                        ?: existingOffsets[fav.id]
+                        ?: fav.horizontalOffset.takeIf { it in 0f..1f }
+                        ?: 0.5f
                     put("horizontalOffset", offsetToPersist.toDouble())
                     put("url", fav.url)
                     put("timestamp", fav.addedTimestamp)

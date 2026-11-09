@@ -42,6 +42,12 @@ interface FavoriteDao {
     @Query("UPDATE favorite_wallpapers SET localFilePath = :path WHERE id = :id")
     suspend fun updateLocalFilePath(id: String, path: String)
 
+    @Query("UPDATE favorite_wallpapers SET thumbUrl = :thumbUrl WHERE id = :id")
+    suspend fun updateThumbUrl(id: String, thumbUrl: String)
+
+    @Query("UPDATE favorite_wallpapers SET thumbUrl = :thumbUrl, localFilePath = :path WHERE id = :id")
+    suspend fun updateThumbUrlAndLocalPath(id: String, thumbUrl: String, path: String?)
+
     @Query("SELECT id FROM favorite_wallpapers")
     suspend fun getAllFavoriteIds(): List<String>
 }
