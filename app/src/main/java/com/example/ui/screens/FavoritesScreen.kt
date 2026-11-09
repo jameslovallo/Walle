@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -27,20 +28,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.R
 import com.example.data.local.FavoriteWallpaper
 import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
@@ -55,6 +51,12 @@ fun FavoritesScreen(
     modifier: Modifier = Modifier
 ) {
     val favorites by viewModel.favorites.collectAsState()
+    val displayMetrics = LocalContext.current.resources.displayMetrics
+    val deviceAspect = if (displayMetrics.heightPixels > 0) {
+        displayMetrics.widthPixels.toFloat() / displayMetrics.heightPixels.toFloat()
+    } else {
+        9f / 20f
+    }
 
     Box(
         modifier = modifier
@@ -83,7 +85,7 @@ fun FavoritesScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Heart wallpapers from Discover or your folder to add them to your rotation.",
+                    text = "Find some from Discover to add to your rotation.",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -105,6 +107,7 @@ fun FavoritesScreen(
                 ) { fav ->
                     FavoriteCard(
                         favorite = fav,
+                        deviceAspect = deviceAspect,
                         onDeleteClick = { viewModel.deleteFavorite(fav.id) },
                         onItemClick = {
                             viewModel.applyFavoriteAsCurrent(fav)
@@ -123,18 +126,13 @@ fun FavoritesScreen(
 @Composable
 fun FavoriteCard(
     favorite: FavoriteWallpaper,
+    deviceAspect: Float,
     onDeleteClick: () -> Unit,
     onItemClick: () -> Unit,
     onFindSimilar: () -> Unit
 ) {
     val effectiveOffset = if (favorite.horizontalOffset in 0f..1f) favorite.horizontalOffset else 0.5f
-
-    val displayMetrics = LocalContext.current.resources.displayMetrics
-    val deviceAspect = if (displayMetrics.heightPixels > 0) {
-        displayMetrics.widthPixels.toFloat() / displayMetrics.heightPixels.toFloat()
-    } else {
-        9f / 20f
-    }
+    val imageUrl = favorite.localFilePath?.ifBlank { null } ?: favorite.url
 
     Box(
         modifier = Modifier
@@ -145,9 +143,9 @@ fun FavoriteCard(
             .clickable { onItemClick() }
             .testTag("favorite_card_${favorite.id}")
     ) {
-        // Image rendered with exact stored positioning offset; horizontal dragging is disabled in grid for smooth scrolling
+        // Whole image only (no generated thumbnails).
         PositionedWallpaperImage(
-            url = favorite.thumbUrl.ifBlank { favorite.url },
+            url = imageUrl,
             fallbackUrl = favorite.url,
             horizontalOffset = effectiveOffset,
             modifier = Modifier.fillMaxSize()
@@ -171,7 +169,7 @@ fun FavoriteCard(
             )
         }
 
-        // Bottom-Right: Remove favorite (broken heart icon)
+        // Bottom-Right: Remove favorite (filled heart — already a favorite)
         IconButton(
             onClick = onDeleteClick,
             modifier = Modifier
@@ -183,8 +181,8 @@ fun FavoriteCard(
             colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
         ) {
             Icon(
-                painter = painterResource(id = R.drawable.ic_favorite_broken),
-                contentDescription = "Delete",
+                imageVector = Icons.Default.Favorite,
+                contentDescription = "Remove Favorite",
                 modifier = Modifier.size(20.dp)
             )
         }

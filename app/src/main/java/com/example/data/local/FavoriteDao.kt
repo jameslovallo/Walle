@@ -4,14 +4,10 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface FavoriteDao {
-    @Query("SELECT * FROM favorite_wallpapers ORDER BY addedTimestamp DESC")
-    fun getAllFavorites(): Flow<List<FavoriteWallpaper>>
-
     @Query("SELECT * FROM favorite_wallpapers WHERE LOWER(purity) IN (:purities) OR (purity = '' AND 'sfw' IN (:purities)) ORDER BY addedTimestamp DESC")
     fun getFavoritesByPurities(purities: List<String>): Flow<List<FavoriteWallpaper>>
 
@@ -33,20 +29,33 @@ interface FavoriteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFavorite(favorite: FavoriteWallpaper)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFavorites(favorites: List<FavoriteWallpaper>)
+
+    @Query("DELETE FROM favorite_wallpapers WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
+
     @Query("DELETE FROM favorite_wallpapers WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Query("SELECT * FROM favorite_wallpapers")
+    suspend fun getAllFavoritesDirect(): List<FavoriteWallpaper>
+
+    /**
+     * Single transaction for index sync: one Flow emission for the grid
+     * instead of one per row (critical for large libraries).
+     */
+    @androidx.room.Transaction
+    suspend fun syncFavorites(upserts: List<FavoriteWallpaper>, deletes: List<String>) {
+        if (deletes.isNotEmpty()) deleteByIds(deletes)
+        if (upserts.isNotEmpty()) insertFavorites(upserts)
+    }
 
     @Query("UPDATE favorite_wallpapers SET horizontalOffset = :offset WHERE id = :id")
     suspend fun updateCropOffset(id: String, offset: Float)
 
     @Query("UPDATE favorite_wallpapers SET localFilePath = :path WHERE id = :id")
     suspend fun updateLocalFilePath(id: String, path: String)
-
-    @Query("UPDATE favorite_wallpapers SET thumbUrl = :thumbUrl WHERE id = :id")
-    suspend fun updateThumbUrl(id: String, thumbUrl: String)
-
-    @Query("UPDATE favorite_wallpapers SET thumbUrl = :thumbUrl, localFilePath = :path WHERE id = :id")
-    suspend fun updateThumbUrlAndLocalPath(id: String, thumbUrl: String, path: String?)
 
     @Query("SELECT id FROM favorite_wallpapers")
     suspend fun getAllFavoriteIds(): List<String>

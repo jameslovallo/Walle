@@ -1,4 +1,4 @@
-package com.example.util
+﻿package com.example.util
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -42,7 +42,7 @@ object ImageCompressionHelper {
                 last = e
                 Log.w(TAG, "openInputStream attempt ${attempt + 1} for $uri failed: ${e.message}")
             }
-            // Fallback: open via file descriptor — some providers return
+            // Fallback: open via file descriptor â€” some providers return
             // null from openInputStream but work via openFileDescriptor.
             try {
                 val fd = context.contentResolver.openFileDescriptor(uri, "r")
@@ -271,151 +271,6 @@ object ImageCompressionHelper {
             throw e
         } catch (e: Throwable) {
             Log.e(TAG, "Error optimizing document file: ${docFile.name}", e)
-            null
-        }
-    }
-
-    /**
-     * File-based fallback used when "all files access"
-     * ([android.os.Environment.isExternalStorageManager]) is granted.
-     * Bypasses SAF entirely for `/storage/emulated/0/...` paths, which
-     * is far more reliable for read/write/delete on external storage.
-     * Returns the optimized `.webp` [java.io.File] on verified success.
-     */
-    suspend fun optimizeFile(sourceFile: java.io.File): java.io.File? = withContext(Dispatchers.IO) {
-        lastFailureReason = ""
-        val sourceName = sourceFile.name
-        try {
-            if (!sourceFile.exists()) {
-                Log.w(TAG, "Source file missing for $sourceName (${sourceFile.absolutePath})")
-                lastFailureReason = "File not found $sourceName"
-                return@withContext null
-            }
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            java.io.FileInputStream(sourceFile).use { stream ->
-                BitmapFactory.decodeStream(stream, null, options)
-            }
-            val origWidth = options.outWidth
-            val origHeight = options.outHeight
-            if (origWidth <= 0 || origHeight <= 0) {
-                Log.w(TAG, "Unsupported file format for $sourceName")
-                lastFailureReason = "Unsupported image format $sourceName"
-                return@withContext null
-            }
-            val maxLongSide = MAX_4K_DIMS.first
-            val maxShortSide = MAX_4K_DIMS.second
-            val isPortrait = origHeight > origWidth
-            val allowedW = if (isPortrait) maxShortSide else maxLongSide
-            val allowedH = if (isPortrait) maxLongSide else maxShortSide
-            var inSampleSize = 1
-            while (origWidth / (inSampleSize * 2) >= allowedW || origHeight / (inSampleSize * 2) >= allowedH) {
-                inSampleSize *= 2
-            }
-            val decodeOptions = BitmapFactory.Options().apply {
-                this.inSampleSize = inSampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            }
-            val decodedBitmap = try {
-                java.io.FileInputStream(sourceFile).use { stream ->
-                    BitmapFactory.decodeStream(stream, null, decodeOptions)
-                }
-            } catch (e: OutOfMemoryError) {
-                Log.e(TAG, "OOM decoding file $sourceName", e)
-                null
-            } ?: run {
-                Log.w(TAG, "Decode returned null for file $sourceName")
-                lastFailureReason = "Decode failed $sourceName"
-                return@withContext null
-            }
-            var finalBitmap = decodedBitmap
-            val currentW = decodedBitmap.width
-            val currentH = decodedBitmap.height
-            val scaleRatio = minOf(allowedW.toFloat() / currentW.toFloat(), allowedH.toFloat() / currentH.toFloat(), 1.0f)
-            if (scaleRatio < 0.98f) {
-                val targetW = (currentW * scaleRatio).roundToInt().coerceAtLeast(1)
-                val targetH = (currentH * scaleRatio).roundToInt().coerceAtLeast(1)
-                try {
-                    finalBitmap = Bitmap.createScaledBitmap(decodedBitmap, targetW, targetH, true)
-                } catch (e: OutOfMemoryError) {
-                    Log.e(TAG, "OOM scaling file $sourceName", e)
-                    decodedBitmap.recycle()
-                    return@withContext null
-                }
-                if (finalBitmap != decodedBitmap) decodedBitmap.recycle()
-            }
-            val bos = ByteArrayOutputStream()
-            val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                Bitmap.CompressFormat.WEBP_LOSSY
-            } else {
-                @Suppress("DEPRECATION")
-                Bitmap.CompressFormat.WEBP
-            }
-            val compressOk = try {
-                finalBitmap.compress(format, 85, bos)
-            } catch (e: OutOfMemoryError) {
-                false
-            }
-            val compressedBytes = bos.toByteArray()
-            bos.close()
-            finalBitmap.recycle()
-            if (!compressOk || compressedBytes.isEmpty()) {
-                Log.w(TAG, "Compress produced no bytes for file $sourceName")
-                lastFailureReason = "Compression produced no bytes for $sourceName"
-                return@withContext null
-            }
-
-            if (sourceName.lowercase().endsWith(".webp")) {
-                try {
-                    java.io.FileOutputStream(sourceFile).use { it.write(compressedBytes); it.flush() }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Cannot write file $sourceName", e)
-                    lastFailureReason = "Cannot write $sourceName (${e.message})"
-                    return@withContext null
-                }
-                return@withContext if (sourceFile.length() > 0L) sourceFile else null
-            }
-
-            val base = sourceName.substringBeforeLast('.')
-            if (base.isBlank()) return@withContext null
-            val parentDir = sourceFile.parentFile ?: return@withContext null
-            val webpFile = java.io.File(parentDir, "$base.webp")
-            try {
-                if (webpFile.exists()) webpFile.delete()
-                java.io.FileOutputStream(webpFile).use { it.write(compressedBytes); it.flush() }
-            } catch (e: Exception) {
-                Log.e(TAG, "Cannot create ${webpFile.name}", e)
-                lastFailureReason = "Cannot create ${webpFile.name} (${e.message})"
-                return@withContext null
-            }
-            if (webpFile.length() <= 0L) {
-                Log.w(TAG, "Written ${webpFile.name} is empty")
-                lastFailureReason = "Write produced empty file ${webpFile.name}"
-                return@withContext null
-            }
-            val deleted = try {
-                sourceFile.delete()
-            } catch (e: Exception) {
-                Log.w(TAG, "File.delete($sourceName) failed", e)
-                false
-            }
-            if (!deleted) {
-                // In-place fallback: overwrite the original with the same bytes.
-                try {
-                    java.io.FileOutputStream(sourceFile).use { it.write(compressedBytes); it.flush() }
-                    webpFile.delete()
-                    return@withContext sourceFile
-                } catch (e: Exception) {
-                    Log.e(TAG, "Cannot replace $sourceName", e)
-                    lastFailureReason = "Cannot replace $sourceName (delete+write failed)"
-                    return@withContext null
-                }
-            }
-            webpFile
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            Log.e(TAG, "Error optimizing file ${sourceFile.name}", e)
-            lastFailureReason = "Error converting ${sourceFile.name}: ${e.message}"
             null
         }
     }

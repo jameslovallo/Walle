@@ -1,3 +1,4 @@
+
 package com.example.data.repository
 
 import android.content.Context
@@ -6,7 +7,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
-import coil.ImageLoader
+import coil.Coil
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.example.data.api.NetworkClient
@@ -15,26 +16,18 @@ import com.example.data.local.AppPreferences
 import com.example.data.local.CurrentWallpaperInfo
 import com.example.data.local.FavoriteWallpaper
 import com.example.data.model.Wallpaper
-import com.example.data.model.WallhavenImageItem
 import com.example.domain.facedetection.FaceDetectorHelper
 import okhttp3.Request
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 
 class WallpaperRepository(
@@ -44,34 +37,15 @@ class WallpaperRepository(
 ) {
     private val apiService = NetworkClient.apiService
     private val favoriteDao = database.favoriteDao()
-    private val imageLoader = ImageLoader(context)
+    // Shared singleton (see WallEApplication.newImageLoader) so face
+    // detection, prefetch, and Compose AsyncImages share one cache.
+    private val imageLoader = Coil.imageLoader(context)
     private val positioningPrefs = context.getSharedPreferences("walle_positioning_cache", Context.MODE_PRIVATE)
     private val memoryOffsetCache = java.util.concurrent.ConcurrentHashMap<String, Float>()
     private val folderMutex = Mutex()
     private val optimizationMutex = Mutex()
 
-    data class OptimizationProgress(
-        val optimized: Int = 0,
-        val total: Int = 0,
-        val isRunning: Boolean = false,
-        val failed: Int = 0,
-        val lastError: String = ""
-    )
-
-    private val _optimizationProgress = MutableStateFlow(OptimizationProgress())
-    val optimizationProgress: StateFlow<OptimizationProgress> = _optimizationProgress.asStateFlow()
-
     companion object {
-        /**
-         * Builds the Wallhaven `q` query from a raw search string so that
-         * all relevant results are fetched.
-         *
-         * Every term is included as a plain tag joined with a single space.
-         * No `+` (must-have) or `-` (exclude) operators are kept: those
-         * narrow the result set. Terms are normalized (split on comma or
-         * whitespace, operator prefixes stripped, lowercased, blank/deduped)
-         * and empty input returns null so Wallhaven serves its broad listing.
-         */
         fun buildWallhavenQuery(query: String?): String? {
             if (query.isNullOrBlank()) return null
             val trimmed = query.trim()
@@ -82,7 +56,6 @@ class WallpaperRepository(
             return buildWallhavenQuery(trimmed.split(',', ' '))
         }
 
-        /** Builds the Wallhaven `q` query from a list of tags. See [buildWallhavenQuery]. */
         fun buildWallhavenQuery(terms: List<String>): String? {
             val cleaned = terms
                 .flatMap { it.split(',', ' ') }
@@ -129,58 +102,41 @@ class WallpaperRepository(
         positioningPrefs.edit().putFloat(id, clamped).apply()
     }
 
-    suspend fun getOrDeterminePositionOffset(id: String, thumbUrlOrSource: String): Float {
+    /**
+     * Stored offset: cache > DB row > 0.5. Never runs face detection.
+     * Used for favorites (index/DB is truth) and cached Discover offsets.
+     */
+    suspend fun getStoredOffset(id: String): Float {
+        getCachedOffset(id)?.let { return it }
         if (id.isNotBlank()) {
-            getCachedOffset(id)?.let { return it }
             val fav = favoriteDao.getFavoriteById(id)
             if (fav != null && fav.horizontalOffset in 0f..1f) {
                 setCachedOffset(id, fav.horizontalOffset)
                 return fav.horizontalOffset
             }
         }
-
-        // Only run AI model if never determined before for this image
-        val detected = detectFaceOffset(thumbUrlOrSource)
-        if (id.isNotBlank()) {
-            setCachedOffset(id, detected)
-        }
-        return detected
+        return 0.5f
     }
 
-    fun isOffsetCached(id: String): Boolean {
-        if (id.isBlank()) return false
-        return memoryOffsetCache.containsKey(id) || positioningPrefs.contains(id)
-    }
-
+    /**
+     * Face detection entry point for the Discover grid.
+     * Only detects when the id is NOT already a favorite (favorites keep
+     * their stored offset from the index/DB).
+     */
     suspend fun lazyDetectOffset(id: String, thumbUrlOrSource: String): Float = withContext(Dispatchers.IO) {
-        getCachedOffset(id)?.let { return@withContext it }
-        val fav = favoriteDao.getFavoriteById(id)
-        if (fav != null && fav.horizontalOffset in 0f..1f) {
-            setCachedOffset(id, fav.horizontalOffset)
-            return@withContext fav.horizontalOffset
+        if (favoriteDao.isFavoriteDirect(id)) {
+            return@withContext getStoredOffset(id)
         }
-
+        getCachedOffset(id)?.let { return@withContext it }
         val detected = detectFaceOffset(thumbUrlOrSource)
         if (id.isNotBlank()) {
             setCachedOffset(id, detected)
-            if (fav != null) {
-                favoriteDao.updateCropOffset(id, detected)
-            }
         }
         detected
     }
 
     val isNsfwMode: Flow<Boolean> = preferences.isNsfwModeFlow
     val currentWallpaper: Flow<CurrentWallpaperInfo> = preferences.currentWallpaperFlow
-    val sfwTags: Flow<Set<String>> = preferences.activeSfwTagsFlow
-    val nsfwTags: Flow<Set<String>> = preferences.activeNsfwTagsFlow
-    val savedSfwTags: Flow<Set<String>> = preferences.savedSfwTagsFlow
-    val savedNsfwTags: Flow<Set<String>> = preferences.savedNsfwTagsFlow
-    val activeSfwTags: Flow<Set<String>> = preferences.activeSfwTagsFlow
-    val activeNsfwTags: Flow<Set<String>> = preferences.activeNsfwTagsFlow
-    val nsfwPurity: Flow<String> = preferences.nsfwPurityFlow
-    val sfwCategory: Flow<String> = preferences.sfwCategoryFlow
-    val nsfwCategory: Flow<String> = preferences.nsfwCategoryFlow
     val apiKey: Flow<String> = preferences.apiKeyFlow
     val intervalMinutes: Flow<Int> = preferences.intervalMinutesFlow
     val sfwFilters = preferences.sfwFilterFlow
@@ -212,23 +168,17 @@ class WallpaperRepository(
         if (id.isBlank()) return@withContext false
         val exists = favoriteDao.isFavoriteDirect(id)
         if (exists) {
-            // Unfavoriting acts exactly the same as deleting the favorite:
-            // purge file, remove from index.json, cache, and record in deleted list
             deleteFavorite(id)
             false
         } else {
-            // Un-delete if previously deleted
-            preferences.removeDeletedWallpaperId(id)
-
             val effectiveOffset = getCachedOffset(id) ?: if (cropOffset in 0f..1f) cropOffset else 0.5f
             setCachedOffset(id, effectiveOffset)
 
-            // Generate high-performance internal thumbnail in app internal storage
-            val internalThumb = generateInternalThumbnail(id, sourceUri = null, sourceUrl = thumbUrl.ifBlank { url })
+            // Whole image is used everywhere; thumbUrl mirrors the full URL (kept for Room compat).
             val fav = FavoriteWallpaper(
                 id = id,
                 url = url,
-                thumbUrl = internalThumb.ifBlank { thumbUrl },
+                thumbUrl = url,
                 purity = purity,
                 category = category,
                 horizontalOffset = effectiveOffset,
@@ -236,7 +186,7 @@ class WallpaperRepository(
                 tags = tags.joinToString(",")
             )
             favoriteDao.insertFavorite(fav)
-            // Save to local user folder if configured
+            // Save to local user folder if configured (optimizes only this file).
             saveWallpaperToLocalFolder(fav)
             true
         }
@@ -247,8 +197,6 @@ class WallpaperRepository(
     suspend fun deleteFavorite(id: String) = withContext(Dispatchers.IO) {
         if (id.isBlank()) return@withContext
 
-        // 1. Instantly remove from Room DB, memory cache, and prefs so the
-        // grid view updates immediately without waiting for disk I/O.
         try {
             favoriteDao.deleteById(id)
         } catch (e: Exception) {
@@ -258,8 +206,6 @@ class WallpaperRepository(
         positioningPrefs.edit().remove(id).apply()
         preferences.removeOptimizedWallpaperId(id)
 
-        // 2. Perform file deletion, thumbnail deletion, index updates, and wallpaper
-        // advancing asynchronously in the background. Do NOT block caller or UI!
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val currentBefore = preferences.currentWallpaperFlow.first()
@@ -274,30 +220,10 @@ class WallpaperRepository(
                     }
                 }
 
-                // Remove internal thumbnail
-                try {
-                    val thumbFile = getInternalThumbnailFile(id)
-                    if (thumbFile.exists()) {
-                        thumbFile.delete()
-                    }
-                } catch (e: Exception) {
-                    Log.e("WallpaperRepo", "Error deleting thumbnail for $id", e)
-                }
-
-                // Remove physical file from user folder (sfw/, nsfw/, root) and update index.json
                 val folderUriString = preferences.localFolderUriFlow.first()
                 if (folderUriString.isNotBlank()) {
                     folderMutex.withLock {
                         try {
-                            val libraryFileDir = if (isAllFilesAccessGranted()) treeUriToFile(folderUriString) else null
-                            if (libraryFileDir != null) {
-                                val allFiles = collectLibraryFilesViaFile(libraryFileDir)
-                                for ((file, cleanId) in allFiles) {
-                                    if (cleanId.equals(id, ignoreCase = true)) {
-                                        file.delete()
-                                    }
-                                }
-                            }
                             val folderUri = Uri.parse(folderUriString)
                             val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
                             if (rootDoc != null && rootDoc.exists() && rootDoc.canWrite()) {
@@ -329,23 +255,28 @@ class WallpaperRepository(
     suspend fun updateCropOffset(id: String, offset: Float) = withContext(Dispatchers.IO) {
         val clamped = offset.coerceIn(0f, 1f)
         setCachedOffset(id, clamped)
-        // Only update the live wallpaper offset if this is the active wallpaper,
-        // so repositioning other favorites does not disturb it.
         if (preferences.currentWallpaperFlow.first().id == id) {
             preferences.updateCurrentWallpaperOffset(clamped)
         }
         val isFav = favoriteDao.isFavoriteDirect(id)
         if (isFav) {
             favoriteDao.updateCropOffset(id, clamped)
-            // Keep index.json in user folder in sync with updated positioning
             val folderUriString = preferences.localFolderUriFlow.first()
             if (folderUriString.isNotBlank()) {
                 try {
                     val folderUri = Uri.parse(folderUriString)
                     val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
                     if (rootDoc != null && rootDoc.exists() && rootDoc.canWrite()) {
-                        folderMutex.withLock {
-                            updateFolderMetadataIndex(rootDoc)
+                        // Never queue the drag's writer behind a long folder
+                        // load: if folderMutex is busy, skip the SAF rewrite —
+                        // the DB already holds the offset and the next sync
+                        // will rewrite index.json from it.
+                        if (folderMutex.tryLock()) {
+                            try {
+                                updateFolderMetadataIndex(rootDoc)
+                            } finally {
+                                folderMutex.unlock()
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -356,26 +287,16 @@ class WallpaperRepository(
     }
 
     /**
-     * Applies a favorite as current wallpaper.
-     * Uses cached positioning data if available or if set in the favorite.
-     * Runs face detection ONLY if positioning has never been determined before,
-     * caching the result immediately to prevent future duplicate calculations.
+     * Applies a favorite as current wallpaper using its stored offset.
+     * Favorites never run face detection.
      */
     suspend fun applyFavorite(fav: FavoriteWallpaper) = withContext(Dispatchers.IO) {
         val finalOffset = if (fav.horizontalOffset in 0f..1f) {
-            setCachedOffset(fav.id, fav.horizontalOffset)
             fav.horizontalOffset
         } else {
-            val cached = getCachedOffset(fav.id)
-            if (cached != null) {
-                cached
-            } else {
-                getOrDeterminePositionOffset(
-                    fav.id,
-                    fav.localFilePath ?: fav.thumbUrl.ifBlank { fav.url }
-                )
-            }
+            getStoredOffset(fav.id)
         }
+        setCachedOffset(fav.id, finalOffset)
         if (fav.horizontalOffset != finalOffset) {
             favoriteDao.updateCropOffset(fav.id, finalOffset)
         }
@@ -400,9 +321,6 @@ class WallpaperRepository(
 
     /**
      * Applies the next wallpaper strictly from the saved Favorites.
-     * When scheduled, wallpapers only cycle through user favorites.
-     * Next is selected at random (not in sequence), avoiding the current
-     * wallpaper when more than one favorite exists.
      */
     suspend fun applyNextScheduledFavoriteWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
@@ -443,9 +361,6 @@ class WallpaperRepository(
         }
     }
 
-    /**
-     * Applies previous favorite wallpaper (skip back).
-     */
     suspend fun applyPreviousScheduledFavoriteWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
             val isNsfw = preferences.isNsfwModeFlow.first()
@@ -490,6 +405,21 @@ class WallpaperRepository(
         }
     }
 
+    /**
+     * Single entry point for SFW<->NSFW mode switching.
+     * Persists the new mode, then immediately applies a wallpaper from the
+     * new category — a saved favorite if one exists, otherwise a fresh
+     * Wallhaven fetch. Used by both the Quick Settings tile and the
+     * in-app top-navigation switcher so they behave identically.
+     */
+    suspend fun switchModeAndApply(nextMode: Boolean) = withContext(Dispatchers.IO) {
+        preferences.setNsfwMode(nextMode)
+        val favoriteResult = applyNextScheduledFavoriteWallpaper()
+        if (favoriteResult.isFailure) {
+            fetchAndApplyNextWallpaper()
+        }
+    }
+
     private fun imageIdFromFileName(name: String): String? {
         val lower = name.lowercase()
         if (name.equals("index.json", ignoreCase = true)) return null
@@ -525,356 +455,42 @@ class WallpaperRepository(
         }
     }
 
-    /**
-     * A file counts as optimized only if it was marked after a successful
-     * write and its bytes are actually WebP. This heals previous false
-     * positives where a failed attempt was marked optimized but the large
-     * original file remained.
-     */
     private fun isFileOptimized(file: DocumentFile, id: String, optimizedIds: Set<String>): Boolean {
         if (id !in optimizedIds) return false
         if (file.name?.lowercase()?.endsWith(".webp") == true) return true
         return hasWebPMagic(file)
     }
 
-    /** Converts a SAF tree URI (e.g. primary:Pictures/Walle) to a plain File path. */
-    private fun treeUriToFile(folderUriString: String): File? {
-        return try {
-            val treeUri = Uri.parse(folderUriString)
-            // e.g. "primary:Pictures/Walle"
-            val treeId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
-            val parts = treeId.split(":", limit = 2)
-            val volume = parts.getOrNull(0) ?: return null
-            val relPath = parts.getOrNull(1)?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: ""
-            val base = when (volume.lowercase()) {
-                "primary" -> "/storage/emulated/0"
-                else -> "/storage/$volume"
-            }
-            val file = File(base, relPath)
-            if (file.exists() && file.isDirectory) file else null
-        } catch (e: Exception) {
-            Log.w("WallpaperRepo", "treeUriToFile failed for $folderUriString", e)
-            null
-        }
-    }
-
-    private fun isAllFilesAccessGranted(): Boolean {
-        return try {
-            android.os.Build.VERSION.SDK_INT < 30 || android.os.Environment.isExternalStorageManager()
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /** File-based library collection (requires all-files access). */
-    private fun collectLibraryFilesViaFile(rootFile: File, maxDepth: Int = 3): List<Triple<File, String, File>> {
-        val out = mutableListOf<Triple<File, String, File>>()
-        fun walk(dir: File, depth: Int) {
-            val entries = try {
-                dir.listFiles() ?: return
-            } catch (e: Exception) {
-                Log.w("WallpaperRepo", "Could not list file dir ${dir.absolutePath}", e)
-                return
-            }
-            for (entry in entries) {
-                if (entry.isDirectory) {
-                    if (depth < maxDepth) walk(entry, depth + 1)
-                } else {
-                    val name = entry.name ?: continue
-                    if (name.equals("index.json", ignoreCase = true)) continue
-                    val id = imageIdFromFileName(name) ?: continue
-                    out.add(Triple(entry, id, dir))
-                }
-            }
-        }
-        walk(rootFile, 0)
-        return out
-    }
-
-    private fun isFileOptimizedViaFile(file: File, id: String, optimizedIds: Set<String>): Boolean {
-        if (id !in optimizedIds) return false
-        if (file.name.lowercase().endsWith(".webp")) return true
-        return try {
-            java.io.FileInputStream(file).use { input ->
-                val header = ByteArray(12)
-                var read = 0
-                while (read < header.size) {
-                    val n = input.read(header, read, header.size - read)
-                    if (n <= 0) break
-                    read += n
-                }
-                read >= 12 &&
-                    header[0] == 'R'.code.toByte() && header[1] == 'I'.code.toByte() &&
-                    header[2] == 'F'.code.toByte() && header[3] == 'F'.code.toByte() &&
-                    header[8] == 'W'.code.toByte() && header[9] == 'E'.code.toByte() &&
-                    header[10] == 'B'.code.toByte() && header[11] == 'P'.code.toByte()
-            }
-        } catch (e: Exception) {
-            false
-        }
-    }
-
     /**
-     * Collects every library image under [rootDoc], recursively (depth <= 3),
-     * so files directly in the selected folder as well as in `sfw/`, `nsfw/`,
-     * or any nested subfolder are included. Returns (file, id, parentDir).
+     * Map of normalized id -> (file, purity) for images directly in
+     * sfw/, nsfw/, and the selected root. Used only to check existence
+     * for index entries during import.
      */
-    private fun collectLibraryFiles(rootDoc: DocumentFile, maxDepth: Int = 3): List<Triple<DocumentFile, String, DocumentFile>> {
-        val out = mutableListOf<Triple<DocumentFile, String, DocumentFile>>()
-        fun walk(dir: DocumentFile, depth: Int) {
-            val entries = try {
-                dir.listFiles()
-            } catch (e: Exception) {
-                Log.w("WallpaperRepo", "Could not list ${dir.uri} (depth=$depth)", e)
-                return
-            }
-            if (depth == 0) {
-                Log.d("WallpaperRepo", "Library scan: ${dir.uri} canRead=${dir.canRead()} canWrite=${dir.canWrite()} entries=${entries.size}")
-            }
-            for (entry in entries) {
-                if (entry.isDirectory) {
-                    if (depth < maxDepth) walk(entry, depth + 1)
-                } else {
-                    val name = entry.name ?: continue
-                    if (name.equals("index.json", ignoreCase = true)) continue
-                    val id = imageIdFromFileName(name) ?: continue
-                    out.add(Triple(entry, id, dir))
+    private fun buildLocalFileMap(rootDoc: DocumentFile): Map<String, Pair<DocumentFile, String>> {
+        val map = mutableMapOf<String, Pair<DocumentFile, String>>()
+        val dirs = listOf(
+            rootDoc.findFile("sfw") to "sfw",
+            rootDoc.findFile("nsfw") to "nsfw",
+            rootDoc to "sfw"
+        )
+        for ((dir, defaultPurity) in dirs) {
+            if (dir == null || !dir.exists() || !dir.isDirectory) continue
+            for (file in dir.listFiles()) {
+                if (file.isDirectory) continue
+                val name = file.name ?: continue
+                if (name.equals("index.json", ignoreCase = true)) continue
+                val id = imageIdFromFileName(name) ?: continue
+                if (!map.containsKey(id)) {
+                    map[id] = file to defaultPurity
                 }
             }
         }
-        walk(rootDoc, 0)
-        return out
+        return map
     }
 
     /**
-     * Refreshes optimization progress by scanning the configured library folder.
-     */
-    suspend fun refreshOptimizationProgress() = withContext(Dispatchers.IO) {
-        val folderUriString = preferences.localFolderUriFlow.first()
-        if (folderUriString.isBlank()) {
-            _optimizationProgress.value = OptimizationProgress(0, 0, false, 0, "No library folder selected. Use Settings → Select Save Folder.")
-            return@withContext
-        }
-        try {
-            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
-            // Prefer direct File access when all-files access is granted —
-            // it bypasses SAF entirely and is the most reliable path.
-            val libraryFileDir = if (isAllFilesAccessGranted()) treeUriToFile(folderUriString) else null
-            if (libraryFileDir != null) {
-                val files = collectLibraryFilesViaFile(libraryFileDir)
-                Log.d("WallpaperRepo", "Library scan (File) found ${files.size} image file(s) under ${libraryFileDir.absolutePath}")
-                val optimizedCount = files.count { (file, id) -> isFileOptimizedViaFile(file, id, optimizedIds) }
-                val scanError = when {
-                    files.isEmpty() -> "Found 0 image files in the selected folder (root + subfolders)."
-                    else -> _optimizationProgress.value.lastError.takeIf { it.contains("Could not convert") || it.contains("Cannot") || it.contains("Permission") } ?: ""
-                }
-                _optimizationProgress.value = _optimizationProgress.value.copy(
-                    optimized = optimizedCount,
-                    total = files.size,
-                    failed = (files.size - optimizedCount).coerceAtLeast(0),
-                    lastError = scanError
-                )
-                return@withContext
-            }
-            val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(folderUriString))
-            if (rootDoc == null || !rootDoc.exists()) {
-                _optimizationProgress.value = OptimizationProgress(0, 0, false, 0, "Library folder not found. Re-select it in Settings.")
-                return@withContext
-            }
-            val unreadable = !rootDoc.canRead()
-            if (unreadable) {
-                val persisted = try {
-                    context.contentResolver.persistedUriPermissions.joinToString { "${it.uri} r=${it.isReadPermission} w=${it.isWritePermission}" }
-                } catch (e: Exception) {
-                    "unavailable: ${e.message}"
-                }
-                Log.w("WallpaperRepo", "Library folder not readable: $folderUriString (re-select the folder in Settings) persisted=[$persisted]")
-            }
-            val files = collectLibraryFiles(rootDoc)
-            Log.d("WallpaperRepo", "Library scan found ${files.size} image file(s) under ${rootDoc.uri}")
-            val optimizedCount = files.count { (file, id) -> isFileOptimized(file, id, optimizedIds) }
-            val scanError = when {
-                unreadable -> "Library folder unreadable — re-select it in Settings."
-                files.isEmpty() -> "Found 0 image files in the selected folder (root + subfolders)."
-                else -> _optimizationProgress.value.lastError
-            }
-            _optimizationProgress.value = _optimizationProgress.value.copy(
-                optimized = optimizedCount,
-                total = files.size,
-                failed = (files.size - optimizedCount).coerceAtLeast(0),
-                lastError = scanError
-            )
-        } catch (e: Exception) {
-            Log.e("WallpaperRepo", "Error refreshing optimization progress", e)
-            _optimizationProgress.value = _optimizationProgress.value.copy(
-                lastError = "Could not scan library folder: ${e.message}"
-            )
-        }
-    }
-
-    /**
-     * Optimizes all library wallpaper files in the background (4K max, WebP format) until complete.
-     * Runs by default; progress is exposed via [optimizationProgress].
-     */
-    suspend fun compressUnoptimizedWallpapers() = withContext(Dispatchers.IO) {
-        optimizationMutex.withLock {
-            val folderUriString = preferences.localFolderUriFlow.first()
-            if (folderUriString.isBlank()) {
-                _optimizationProgress.value = OptimizationProgress(0, 0, false)
-                return@withLock
-            }
-
-            _optimizationProgress.value = _optimizationProgress.value.copy(isRunning = true)
-            try {
-                // File path (all-files access): bypass SAF entirely.
-                val libraryFileDir = if (isAllFilesAccessGranted()) treeUriToFile(folderUriString) else null
-                if (libraryFileDir != null) {
-                    val optimizedIds = preferences.optimizedWallpaperIdsFlow.first().toMutableSet()
-                    val allFiles = collectLibraryFilesViaFile(libraryFileDir)
-                    Log.d("WallpaperRepo", "Optimization pass (File) queued ${allFiles.size} file(s) under ${libraryFileDir.absolutePath}")
-                    var optimizedCount = allFiles.count { (file, id) -> isFileOptimizedViaFile(file, id, optimizedIds) }
-                    var failedCount = allFiles.size - optimizedCount
-                    var lastErrorMsg = _optimizationProgress.value.lastError
-                    _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
-                    for ((file, id) in allFiles) {
-                        if (isFileOptimizedViaFile(file, id, optimizedIds)) continue
-                        val optimizedFile = try {
-                            com.example.util.ImageCompressionHelper.optimizeFile(file)
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Throwable) {
-                            Log.e("WallpaperRepo", "Error optimizing file ${file.name}", e)
-                            null
-                        }
-                        if (optimizedFile != null) {
-                            optimizedIds.add(id)
-                            preferences.markWallpaperOptimized(id)
-                            try {
-                                if (favoriteDao.isFavoriteDirect(id)) {
-                                    favoriteDao.updateLocalFilePath(id, Uri.fromFile(optimizedFile).toString())
-                                }
-                            } catch (e: Exception) {
-                                Log.e("WallpaperRepo", "Error updating local path for $id", e)
-                            }
-                            if (optimizedCount < allFiles.size) optimizedCount += 1
-                            failedCount = (allFiles.size - optimizedCount).coerceAtLeast(0)
-                        } else {
-                            val reason = com.example.util.ImageCompressionHelper.lastFailureReason.ifBlank {
-                                "Could not convert ${file.name}."
-                            }
-                            lastErrorMsg = reason
-                            Log.w("WallpaperRepo", "File optimization did not complete for ${file.name}; will retry — $reason")
-                        }
-                        _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
-                    }
-                    // Do NOT rewrite index.json here: the compressor runs
-                    // concurrently with folder load (syncAndLoadFromSelectedFolder)
-                    // and Vision init, and a stale DB snapshot would clobber
-                    // valid horizontalOffset values stored in index.json.
-                    // The optimized flag is refreshed on the next folder sync
-                    // (and on every save/delete/offset update) via
-                    // updateFolderMetadataIndex, which preserves offsets.
-                    _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false, failedCount, lastErrorMsg)
-                    return@withLock
-                }
-                val folderUri = Uri.parse(folderUriString)
-                val rootDoc = DocumentFile.fromTreeUri(context, folderUri)
-                if (rootDoc == null || !rootDoc.exists()) {
-                    Log.w("WallpaperRepo", "Library folder not found: $folderUriString")
-                    refreshOptimizationProgress()
-                    _optimizationProgress.value = _optimizationProgress.value.copy(isRunning = false)
-                    return@withLock
-                }
-                // NOTE: DocumentFile.canWrite() is unreliable on external
-                // storage (e.g. /storage/emulated/0/Pictures/Walle) — it can
-                // report false even with a persisted read/write grant.
-                // Only warn here; each file's write outcome is the real
-                // signal. (If permission was lost, re-select the folder in
-                // Settings to restore read/write access.)
-                if (!rootDoc.canWrite()) {
-                    Log.w("WallpaperRepo", "Library folder reports canWrite=false; attempting anyway")
-                }
-
-                val optimizedIds = preferences.optimizedWallpaperIdsFlow.first().toMutableSet()
-
-                // Collect every image file in the library (recursive, so
-                // files at any depth are included) so duplicates and
-                // previously mis-marked large originals are revisited.
-                data class PendingFile(val file: DocumentFile, val id: String, val parentDir: DocumentFile)
-                val allFiles = collectLibraryFiles(rootDoc).map { (file, id, parentDir) ->
-                    PendingFile(file, id, parentDir)
-                }
-                Log.d("WallpaperRepo", "Optimization pass queued ${allFiles.size} file(s); running=true")
-
-                var optimizedCount = allFiles.count { isFileOptimized(it.file, it.id, optimizedIds) }
-                var failedCount = allFiles.size - optimizedCount
-                var lastErrorMsg = _optimizationProgress.value.lastError
-                _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
-
-                for (item in allFiles) {
-                    if (isFileOptimized(item.file, item.id, optimizedIds)) continue
-                    // Re-fetch the file fresh from its parent so we don't
-                    // use a stale URI from the scan snapshot.
-                    val freshFile = try {
-                        item.parentDir.findFile(item.file.name ?: "") ?: item.file
-                    } catch (e: Exception) {
-                        item.file
-                    }
-                    val optimizedFile = try {
-                        com.example.util.ImageCompressionHelper.optimizeDocumentFile(
-                            context = context,
-                            docFile = freshFile,
-                            parentDir = item.parentDir
-                        )
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Throwable) {
-                        Log.e("WallpaperRepo", "Error optimizing ${item.file.name}", e)
-                        null
-                    }
-                    if (optimizedFile != null) {
-                        optimizedIds.add(item.id)
-                        preferences.markWallpaperOptimized(item.id)
-                        // Point the DB at the replaced .webp file so later
-                        // face-detection / sync does not hit a deleted URI.
-                        try {
-                            if (favoriteDao.isFavoriteDirect(item.id)) {
-                                favoriteDao.updateLocalFilePath(item.id, optimizedFile.uri.toString())
-                            }
-                        } catch (e: Exception) {
-                            Log.e("WallpaperRepo", "Error updating local path for ${item.id}", e)
-                        }
-                        if (optimizedCount < allFiles.size) optimizedCount += 1
-                        failedCount = (allFiles.size - optimizedCount).coerceAtLeast(0)
-                    } else {
-                        // Leave unmarked so the file is retried on the next run.
-                        val reason = com.example.util.ImageCompressionHelper.lastFailureReason.ifBlank {
-                            "Could not convert ${item.file.name}."
-                        }
-                        lastErrorMsg = reason
-                        Log.w("WallpaperRepo", "Optimization did not complete for ${item.file.name}; will retry — $reason")
-                    }
-                    _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, true, failedCount, lastErrorMsg)
-                }
-
-                // Do NOT rewrite index.json here (see File-path branch above):
-                // a concurrent compress pass must never overwrite the
-                // horizontalOffset values that folder load just restored from
-                // index.json. Optimized status is picked up on next sync.
-                _optimizationProgress.value = OptimizationProgress(optimizedCount, allFiles.size, false, failedCount, lastErrorMsg)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                Log.e("WallpaperRepo", "Error compressing unoptimized wallpapers", e)
-                refreshOptimizationProgress()
-                _optimizationProgress.value = _optimizationProgress.value.copy(isRunning = false)
-            }
-        }
-    }
-
-    /**
-     * Optimizes a single saved wallpaper file in the background (4K max, WebP format).
-     * Only marks as optimized after the WebP replacement actually succeeds.
+     * Optimizes a single newly-favorited wallpaper file (4K max, WebP).
+     * The only optimization entry point after simplification.
      */
     suspend fun optimizeSingleWallpaperFile(
         targetFile: DocumentFile,
@@ -884,10 +500,7 @@ class WallpaperRepository(
         optimizationMutex.withLock {
             try {
                 val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
-                if (isFileOptimized(targetFile, id, optimizedIds)) {
-                    refreshOptimizationProgress()
-                    return@withLock
-                }
+                if (isFileOptimized(targetFile, id, optimizedIds)) return@withLock
                 val optimizedFile = com.example.util.ImageCompressionHelper.optimizeDocumentFile(
                     context = context,
                     docFile = targetFile,
@@ -903,7 +516,6 @@ class WallpaperRepository(
                         Log.e("WallpaperRepo", "Error updating local path for $id", e)
                     }
                 }
-                refreshOptimizationProgress()
             } catch (e: Exception) {
                 Log.e("WallpaperRepo", "Error optimizing single wallpaper $id", e)
             }
@@ -978,9 +590,6 @@ class WallpaperRepository(
         }
 
         try {
-            // Single timeout layer (OkHttp callTimeout only). A second
-            // coroutine withTimeout here cancels mid-flight and poisons
-            // the pool Coil shares, which hurts slower WiFi paths first.
             val sortingMode = if (wallhavenQuery.isNullOrBlank()) "toplist" else "relevance"
             val response = try {
                 apiService.searchWallpapers(
@@ -994,7 +603,6 @@ class WallpaperRepository(
                 )
             } catch (e: Exception) {
                 if (apiKey != null) {
-                    // Fallback without apiKey if key is invalid or blocked
                     apiService.searchWallpapers(
                         query = wallhavenQuery,
                         categories = categoriesCode,
@@ -1014,14 +622,15 @@ class WallpaperRepository(
             val lastPage = meta?.lastPage ?: page
             val total = meta?.total ?: response.data.size
 
-            val favoriteIds = favoriteDao.getAllFavoriteIds().toSet()
+            // Single query for the whole page instead of one per item.
+            val favoriteOffsets = favoriteDao.getAllFavoritesDirect().associate { it.id to it.horizontalOffset }
 
             val wallpapers = response.data.map { item ->
                 val fullUrl = item.path.ifBlank { item.url }
                 val thumb = item.thumbs?.large ?: item.thumbs?.original ?: item.thumbs?.small ?: fullUrl
-                val isFav = item.id in favoriteIds
+                val isFav = item.id in favoriteOffsets
                 val cachedOffset = getCachedOffset(item.id)
-                val favOffset = if (isFav) favoriteDao.getFavoriteById(item.id)?.horizontalOffset else null
+                val favOffset = favoriteOffsets[item.id]
                 val offset = cachedOffset ?: favOffset?.takeIf { it in 0f..1f } ?: 0.5f
 
                 Wallpaper(
@@ -1046,9 +655,7 @@ class WallpaperRepository(
 
     /**
      * Fetches and applies the next wallpaper with minimal latency.
-     * 1) Face detection model ONLY determines positioning the first time an image is loaded,
-     *    never again for the same image (checked against memory & persistent cache).
-     * 2) If no tag is selected, shuffles saved favorites (preserving existing positioning).
+     * Uses stored offsets only; no face detection here.
      */
     suspend fun fetchAndApplyNextWallpaper(): Result<Wallpaper> = withContext(Dispatchers.IO) {
         try {
@@ -1059,14 +666,14 @@ class WallpaperRepository(
             var candidateWallpaper: Wallpaper? = null
 
             if (tags.isEmpty()) {
-                // If no tag is selected, shuffled photos saved from favorites
                 val purities = if (isNsfw) listOf("sketchy", "nsfw") else listOf("sfw")
                 val randomFav = favoriteDao.getRandomFavorite(purities)
                 if (randomFav != null) {
-                    val finalOffset = getOrDeterminePositionOffset(
-                        randomFav.id,
-                        randomFav.localFilePath ?: randomFav.thumbUrl.ifBlank { randomFav.url }
-                    )
+                    val finalOffset = if (randomFav.horizontalOffset in 0f..1f) {
+                        randomFav.horizontalOffset
+                    } else {
+                        getStoredOffset(randomFav.id)
+                    }
                     if (randomFav.horizontalOffset !in 0f..1f) {
                         favoriteDao.updateCropOffset(randomFav.id, finalOffset)
                     }
@@ -1090,21 +697,14 @@ class WallpaperRepository(
             }
 
             if (candidateWallpaper == null) {
-                // Query Wallhaven API (New image!)
                 val fetched = fetchFromWallhaven(isNsfw, tags, existingIds)
                 if (fetched != null) {
-                    // Face detection runs ONLY the first time an image is loaded,
-                    // using the lightweight thumbnail to prevent high network latency.
-                    val smartOffset = getOrDeterminePositionOffset(
-                        fetched.id,
-                        fetched.thumbUrl.ifBlank { fetched.fullUrl }
-                    )
-                    candidateWallpaper = fetched.copy(horizontalOffset = smartOffset)
+                    val stored = getCachedOffset(fetched.id) ?: 0.5f
+                    candidateWallpaper = fetched.copy(horizontalOffset = stored)
                 }
             }
 
             if (candidateWallpaper != null) {
-                // Update current wallpaper state with final pre-calculated offset and tags
                 preferences.setCurrentWallpaper(
                     id = candidateWallpaper.id,
                     url = candidateWallpaper.fullUrl,
@@ -1115,7 +715,6 @@ class WallpaperRepository(
                     tags = candidateWallpaper.tags
                 )
 
-                // Broadcast update event to Live Wallpaper
                 notifyWallpaperChanged()
 
                 Result.success(candidateWallpaper)
@@ -1137,11 +736,8 @@ class WallpaperRepository(
             val existingIds = favoriteDao.getAllFavoriteIds().toSet()
             val fetched = fetchFromWallhaven(isNsfw, setOf(initialTag), existingIds)
             if (fetched != null) {
-                val smartOffset = getOrDeterminePositionOffset(
-                    fetched.id,
-                    fetched.thumbUrl.ifBlank { fetched.fullUrl }
-                )
-                val finalWallpaper = fetched.copy(horizontalOffset = smartOffset)
+                val stored = getCachedOffset(fetched.id) ?: 0.5f
+                val finalWallpaper = fetched.copy(horizontalOffset = stored)
                 preferences.setCurrentWallpaper(
                     id = finalWallpaper.id,
                     url = finalWallpaper.fullUrl,
@@ -1180,11 +776,6 @@ class WallpaperRepository(
             else -> "111"
         }
 
-        // Purity code:
-        // SFW mode: "100" (SFW only)
-        // NSFW mode:
-        // - With API key: "010" (sketchy), "001" (nsfw), or "011" (both)
-        // - Without API key: Wallhaven returns 0 items for "001", so fallback to "010" (sketchy)
         val nsfwPuritySelection = preferences.nsfwPurityFlow.first()
         val purityCode = if (!isNsfw) {
             "100"
@@ -1206,10 +797,6 @@ class WallpaperRepository(
             listOf(if (isNsfw) "model" else "nature")
         }
 
-        // Single unified search call: all tags are included as plain
-        // terms (no + / - operators) with relevance sorting so the
-        // broadest relevant result set is returned in one request.
-        // Category and purity codes above are unchanged.
         val wallhavenQuery = buildWallhavenQuery(targetTags)
 
         val response = try {
@@ -1228,18 +815,15 @@ class WallpaperRepository(
 
         if (response.data.isEmpty()) return null
 
-        // Select a fresh wallpaper, prioritizing non-existing IDs, with random selection among results
         val unseenItems = response.data.filter { it.id !in existingIds }
         val item = unseenItems.randomOrNull() ?: response.data.randomOrNull() ?: return null
 
         val fullUrl = item.path.ifBlank { item.url }
         val thumb = item.thumbs?.large ?: item.thumbs?.original ?: item.thumbs?.small ?: fullUrl
 
-        // Direct tags or target query tags (avoiding synchronous blocking detail call)
         val directTags = item.tags?.map { it.name } ?: emptyList()
         val initialTags = if (directTags.isNotEmpty()) directTags else targetTags
 
-        // Pre-warm Coil cache for full image in background
         imageLoader.enqueue(
             ImageRequest.Builder(context)
                 .data(fullUrl)
@@ -1260,9 +844,9 @@ class WallpaperRepository(
     }
 
     /**
-     * Runs ML Kit face detection on the image thumbnail or local stream to position the focus
-     * to the right side of the screen within the device's aspect ratio.
-     * Uses small software bitmaps to guarantee sub-50ms execution.
+     * Runs ML Kit face detection on the image thumbnail or local stream.
+     * Only called from the Discover grid (via lazyDetectOffset) for
+     * items that are not already favorites, plus one manual AI button.
      */
     suspend fun detectFaceOffset(imageSource: String): Float = withContext(Dispatchers.IO) {
         if (imageSource.isBlank()) return@withContext 0.5f
@@ -1271,7 +855,6 @@ class WallpaperRepository(
             kotlinx.coroutines.withTimeout(3500L) {
                 var bitmap: Bitmap? = null
 
-                // 1. If it's a local content:// or file:// URI
                 if (imageSource.startsWith("content://") || imageSource.startsWith("file://")) {
                     try {
                         val uri = Uri.parse(imageSource)
@@ -1298,13 +881,12 @@ class WallpaperRepository(
                     }
                 }
 
-                // 2. If it's a remote URL or local decoding failed
                 if (bitmap == null) {
                     try {
                         val request = ImageRequest.Builder(context)
                             .data(imageSource)
                             .size(720, 720)
-                            .allowHardware(false) // Must be software bitmap for ML Kit
+                            .allowHardware(false)
                             .build()
                         val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
                         bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
@@ -1333,332 +915,149 @@ class WallpaperRepository(
     }
 
     /**
-     * Internal thumbnail storage helper.
-     * Generates and stores thumbnails in the app's internal storage directory,
-     * ensuring high-performance grid loading without writing to the user's selected folder.
-     */
-    fun getInternalThumbnailFile(id: String): File {
-        val thumbsDir = File(context.filesDir, "favorites_thumbs")
-        if (!thumbsDir.exists()) {
-            thumbsDir.mkdirs()
-        }
-        return File(thumbsDir, "$id.webp")
-    }
-
-    suspend fun generateInternalThumbnail(
-        id: String,
-        sourceUri: Uri?,
-        sourceUrl: String?
-    ): String = withContext(Dispatchers.IO) {
-        val thumbFile = getInternalThumbnailFile(id)
-        if (thumbFile.exists() && thumbFile.length() > 0) {
-            return@withContext Uri.fromFile(thumbFile).toString()
-        }
-
-        try {
-            var bitmap: Bitmap? = null
-
-            // 1. Decode from local document URI if available
-            if (sourceUri != null) {
-                try {
-                    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                        BitmapFactory.decodeStream(input, null, boundsOptions)
-                    }
-
-                    val targetSize = 720
-                    var sampleSize = 1
-                    val maxDim = maxOf(boundsOptions.outWidth, boundsOptions.outHeight)
-                    while (maxDim / (sampleSize * 2) >= targetSize) {
-                        sampleSize *= 2
-                    }
-
-                    val decodeOptions = BitmapFactory.Options().apply {
-                        inSampleSize = sampleSize
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
-                    }
-
-                    context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                        bitmap = BitmapFactory.decodeStream(input, null, decodeOptions)
-                    }
-                } catch (e: Exception) {
-                    Log.e("WallpaperRepo", "Error decoding local bitmap for thumbnail $id", e)
-                }
-            }
-
-            // 2. Fallback to imageLoader if sourceUrl provided
-            if (bitmap == null && !sourceUrl.isNullOrBlank()) {
-                val request = ImageRequest.Builder(context)
-                    .data(sourceUrl)
-                    .size(720, 1280)
-                    .allowHardware(false)
-                    .build()
-                val result = (imageLoader.execute(request) as? SuccessResult)?.drawable
-                bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
-            }
-
-            val finalBitmap = bitmap
-            if (finalBitmap != null) {
-                FileOutputStream(thumbFile).use { out ->
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                        finalBitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 92, out)
-                    } else {
-                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
-                    }
-                }
-                return@withContext Uri.fromFile(thumbFile).toString()
-            }
-        } catch (e: Exception) {
-            Log.e("WallpaperRepo", "Failed to generate internal thumbnail for $id", e)
-        }
-
-        return@withContext sourceUrl ?: ""
-    }
-
-    /**
-     * Loads the existing index.json and wallpaper files from the selected folder into the app.
-     * If positioning data exists in index.json, it is preserved. If not, it is marked with -1f
-     * so that face detection runs upon application, preventing jank.
-     * Thumbnails are generated strictly into the app's internal storage for high performance.
+     * Index-driven favorite import. index.json is the source of truth:
+     * read it, keep each entry whose image file exists (loaded with the
+     * stored horizontalOffset), drop entries whose file is missing from
+     * both the index and the DB. No thumbnails, no optimization, no
+     * face detection on import.
      */
     suspend fun syncAndLoadFromSelectedFolder(folderUriString: String) = withContext(Dispatchers.IO) {
         if (folderUriString.isBlank()) return@withContext
 
         try {
             folderMutex.withLock {
-            val folderUri = Uri.parse(folderUriString)
-            val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withLock
-            if (!rootDoc.canRead()) return@withLock
+                val folderUri = Uri.parse(folderUriString)
+                val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withLock
+                if (!rootDoc.canRead()) return@withLock
 
-            // Ensure .nomedia in root to prevent recent files clutter
-            if (rootDoc.canWrite() && rootDoc.findFile(".nomedia") == null) {
-                try {
-                    rootDoc.createFile("application/octet-stream", ".nomedia")
-                } catch (e: Exception) {
-                    // Ignore
-                }
-            }
-
-            val indexedItemsMap = mutableMapOf<String, JSONObject>()
-
-            // 1. Read existing index.json if present
-            val indexFile = rootDoc.findFile("index.json")
-            if (indexFile != null && indexFile.exists()) {
-                try {
-                    val jsonString = context.contentResolver.openInputStream(indexFile.uri)?.use { stream ->
-                        stream.bufferedReader().use { it.readText() }
+                if (rootDoc.canWrite() && rootDoc.findFile(".nomedia") == null) {
+                    try {
+                        rootDoc.createFile("application/octet-stream", ".nomedia")
+                    } catch (e: Exception) {
                     }
-                    if (!jsonString.isNullOrBlank()) {
-                        val rootJson = JSONObject(jsonString)
-                        val array = rootJson.optJSONArray("wallpapers")
-                        if (array != null) {
-                            for (i in 0 until array.length()) {
-                                val item = array.getJSONObject(i)
-                                val id = item.optString("id")
-                                if (id.isNotBlank()) {
-                                    indexedItemsMap[id] = item
+                }
+
+                // 1. Read index.json (source of truth).
+                val indexFile = rootDoc.findFile("index.json")
+                val indexEntries = mutableListOf<JSONObject>()
+                if (indexFile != null && indexFile.exists()) {
+                    try {
+                        val jsonString = context.contentResolver.openInputStream(indexFile.uri)?.use { stream ->
+                            stream.bufferedReader().use { it.readText() }
+                        }
+                        if (!jsonString.isNullOrBlank()) {
+                            val rootJson = JSONObject(jsonString)
+                            // Portable settings travel with the library.
+                            // API key is intentionally NOT stored/loaded here:
+                            // the folder is user-shared/cloud-synced plaintext,
+                            // while the key is a secret kept in app DataStore.
+                            applyIndexMetadata(rootJson)
+                            val array = rootJson.optJSONArray("wallpapers")
+                            if (array != null) {
+                                for (i in 0 until array.length()) {
+                                    indexEntries.add(array.getJSONObject(i))
                                 }
                             }
                         }
-                    }
-                } catch (e: Exception) {
-                    Log.e("WallpaperRepo", "Error parsing existing index.json", e)
-                }
-            }
-
-            // 2. Scan subdirectories: sfw, nsfw, and root
-            val dirsToScan = listOf(
-                rootDoc.findFile("sfw") to "sfw",
-                rootDoc.findFile("nsfw") to "nsfw",
-                rootDoc to "sfw"
-            )
-
-            val discoveredFiles = mutableMapOf<String, Pair<DocumentFile, String>>()
-
-            for ((dir, defaultPurity) in dirsToScan) {
-                if (dir == null || !dir.exists() || !dir.isDirectory) continue
-                for (file in dir.listFiles()) {
-                    if (file.isDirectory) continue
-                    val name = file.name ?: continue
-                    if (name.equals("index.json", ignoreCase = true)) continue
-                    val lower = name.lowercase()
-                    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp")) {
-                        val baseId = name.substringBeforeLast('.')
-                        val id = if (baseId.startsWith("wallhaven-", ignoreCase = true)) {
-                            baseId.substringAfter("wallhaven-")
-                        } else {
-                            baseId
-                        }
-                        if (!discoveredFiles.containsKey(id)) {
-                            discoveredFiles[id] = file to defaultPurity
-                        }
-                    }
-                }
-            }
-
-            // 3. Prune index items without a corresponding image file.
-            // A favorite removed in-app (or deleted via Files) must not be
-            // resurrected from index.json alone — that left a card with no
-            // image. Delete the DB row, internal thumbnail and cached offset
-            // so both the view (Room Flow) and the index stay consistent.
-            val orphanIndexIds = indexedItemsMap.keys - discoveredFiles.keys
-            for (id in orphanIndexIds) {
-                try {
-                    favoriteDao.deleteById(id)
-                } catch (e: Exception) {
-                    Log.e("WallpaperRepo", "Error removing orphan $id from DB", e)
-                }
-                try {
-                    val thumbFile = getInternalThumbnailFile(id)
-                    if (thumbFile.exists()) {
-                        thumbFile.delete()
-                    }
-                } catch (e: Exception) {
-                    Log.e("WallpaperRepo", "Error deleting orphan thumbnail for $id", e)
-                }
-                memoryOffsetCache.remove(id)
-                positioningPrefs.edit().remove(id).apply()
-            }
-
-            // 4. Process each scanned file: restore stored positioning and fast-insert into Room
-            val favoritesToInsert = mutableListOf<FavoriteWallpaper>()
-            val unpositionedItems = mutableListOf<Pair<String, String>>() // id to imageSource
-
-            for (id in discoveredFiles.keys) {
-                val indexJson = indexedItemsMap[id]
-                val localFileInfo = discoveredFiles[id]
-
-                val purity = indexJson?.optString("purity")
-                    ?: localFileInfo?.second
-                    ?: "sfw"
-                val category = indexJson?.optString("category") ?: "all"
-
-                // Check stored positioning: index.json takes highest priority, then cached prefs, fallback 0.5f
-                val rawOffset = if (indexJson != null && indexJson.has("horizontalOffset")) {
-                    indexJson.optDouble("horizontalOffset", Double.NaN)
-                } else {
-                    Double.NaN
-                }
-
-                val hasValidStoredOffset = !rawOffset.isNaN() && rawOffset in 0.0..1.0
-                val horizontalOffset = if (hasValidStoredOffset) {
-                    val off = rawOffset.toFloat()
-                    setCachedOffset(id, off)
-                    off
-                } else {
-                    val cached = getCachedOffset(id)
-                    if (cached != null) {
-                        cached
-                    } else {
-                        // Fall back to the existing DB row before treating the
-                        // item as unpositioned. Without this, a re-sync after
-                        // the cache was cleared would overwrite a DB offset
-                        // that is otherwise valid with 0.5 + face re-detection.
-                        val existingFav = favoriteDao.getFavoriteById(id)
-                        val dbOffset = existingFav?.horizontalOffset
-                        if (dbOffset != null && dbOffset in 0f..1f) {
-                            setCachedOffset(id, dbOffset)
-                            dbOffset
-                        } else {
-                            val localUriStr = localFileInfo?.first?.uri?.toString() ?: ""
-                            unpositionedItems.add(id to localUriStr)
-                            0.5f
-                        }
-                    }
-                }
-
-                val timestamp = indexJson?.optLong("timestamp", System.currentTimeMillis()) ?: System.currentTimeMillis()
-                val localFileUri = localFileInfo?.first?.uri
-                val url = indexJson?.optString("url")
-                    ?: localFileUri?.toString()
-                    ?: "https://w.wallhaven.cc/full/${id.take(2)}/wallhaven-$id.jpg"
-
-                // Use internal thumbnail if already created; otherwise use localFileUri immediately
-                // so the grid displays instantly without waiting for thumbnail generation!
-                val thumbFile = getInternalThumbnailFile(id)
-                val initialThumb = if (thumbFile.exists() && thumbFile.length() > 0) {
-                    Uri.fromFile(thumbFile).toString()
-                } else {
-                    localFileUri?.toString() ?: url
-                }
-
-                val fav = FavoriteWallpaper(
-                    id = id,
-                    url = url,
-                    thumbUrl = initialThumb,
-                    purity = purity,
-                    category = category,
-                    horizontalOffset = horizontalOffset,
-                    addedTimestamp = timestamp,
-                    localFilePath = localFileUri?.toString()
-                )
-
-                favoritesToInsert.add(fav)
-            }
-
-            // Immediately insert all favorites into the DB so the UI populates instantaneously
-            for (fav in favoritesToInsert) {
-                favoriteDao.insertFavorite(fav)
-            }
-
-            // 5. Update/refresh index.json in the user folder so it reflects all favorites
-            updateFolderMetadataIndex(rootDoc)
-            notifyWallpaperChanged()
-
-            // 6. Asynchronously optimize thumbnails in background and run face detection on unpositioned items
-            CoroutineScope(Dispatchers.IO).launch {
-                for (fav in favoritesToInsert) {
-                    try {
-                        val thumbFile = getInternalThumbnailFile(fav.id)
-                        if (!thumbFile.exists() || thumbFile.length() == 0L) {
-                            val localUri = fav.localFilePath?.let { Uri.parse(it) }
-                            val internalThumb = generateInternalThumbnail(
-                                id = fav.id,
-                                sourceUri = localUri,
-                                sourceUrl = fav.url
-                            )
-                            if (internalThumb.isNotBlank() && internalThumb != fav.thumbUrl) {
-                                // Targeted UPDATE only: the snapshot `fav` may be
-                                // stale by now (user drag / face detection may have
-                                // updated the offset). A REPLACE would overwrite the
-                                // DB row with the stale horizontalOffset. UPDATE
-                                // also avoids resurrecting a deleted favorite.
-                                favoriteDao.updateThumbUrl(fav.id, internalThumb)
-                            }
-                        }
                     } catch (e: Exception) {
-                        Log.e("WallpaperRepo", "Error generating background thumbnail for ${fav.id}", e)
+                        Log.e("WallpaperRepo", "Error parsing existing index.json", e)
                     }
                 }
 
-                if (unpositionedItems.isNotEmpty()) {
-                    var anyOffsetUpdated = false
-                    for ((id, src) in unpositionedItems) {
-                        try {
-                            val detected = detectFaceOffset(src)
-                            setCachedOffset(id, detected)
-                            favoriteDao.updateCropOffset(id, detected)
-                            anyOffsetUpdated = true
-                        } catch (e: Exception) {
-                            Log.e("WallpaperRepo", "Error detecting background offset for $id", e)
-                        }
+                // 2. Map local files for existence checks.
+                val fileMap = buildLocalFileMap(rootDoc)
+
+                // 3. Build surviving list fully in memory, then one DB
+                // transaction. Per-row inserts/deletes each emit the Room
+                // Flow (recompose + image loads); batching means one
+                // emission no matter the library size.
+                val currentId = try { preferences.currentWallpaperFlow.first().id } catch (e: Exception) { "" }
+                val existingById = favoriteDao.getAllFavoritesDirect().associateBy { it.id }
+                val toUpsert = mutableListOf<FavoriteWallpaper>()
+                val offsetPuts = mutableMapOf<String, Float>()
+                val survivingIds = mutableSetOf<String>()
+                var removedAny = false
+                for (entry in indexEntries) {
+                    val rawId = entry.optString("id")
+                    if (rawId.isBlank()) {
+                        removedAny = true
+                        continue
                     }
-                    if (anyOffsetUpdated) {
-                        try {
-                            folderMutex.withLock {
-                                updateFolderMetadataIndex(rootDoc)
-                            }
-                            notifyWallpaperChanged()
-                        } catch (e: Exception) {
-                            // Ignore
-                        }
+                    val id = extractWallhavenId(rawId)
+                    val local = fileMap[id]
+                    if (local == null) {
+                        removedAny = true
+                        continue
+                    }
+                    survivingIds.add(id)
+
+                    val rawOffset = if (entry.has("horizontalOffset")) {
+                        entry.optDouble("horizontalOffset", Double.NaN)
+                    } else {
+                        Double.NaN
+                    }
+                    val offset = if (!rawOffset.isNaN() && rawOffset in 0.0..1.0) {
+                        rawOffset.toFloat()
+                    } else {
+                        0.5f
+                    }
+                    offsetPuts[id] = offset
+
+                    val localUri = local.first.uri
+                    val url = entry.optString("url").ifBlank { localUri.toString() }
+                    val candidate = FavoriteWallpaper(
+                        id = id,
+                        url = url,
+                        thumbUrl = localUri.toString(),
+                        purity = entry.optString("purity").ifBlank { local.second },
+                        category = entry.optString("category").ifBlank { "all" },
+                        horizontalOffset = offset,
+                        addedTimestamp = entry.optLong("timestamp", System.currentTimeMillis()),
+                        localFilePath = localUri.toString()
+                    )
+                    // Skip unchanged rows: re-inserting identical rows would
+                    // still invalidate the Flow and thrash the grid.
+                    val existing = existingById[id]
+                    if (existing == null ||
+                        existing.url != candidate.url ||
+                        existing.purity != candidate.purity ||
+                        existing.category != candidate.category ||
+                        existing.horizontalOffset != candidate.horizontalOffset ||
+                        existing.addedTimestamp != candidate.addedTimestamp ||
+                        existing.localFilePath != candidate.localFilePath
+                    ) {
+                        toUpsert.add(candidate)
                     }
                 }
+
+                // DB mirrors the index: drop rows not in the surviving set.
+                val toDelete = existingById.keys.filter { it !in survivingIds }
+                if (toDelete.isNotEmpty()) removedAny = true
+
+                favoriteDao.syncFavorites(toUpsert, toDelete)
+
+                // Single SharedPreferences flush for the whole import
+                // instead of one edit().apply() per image.
+                if (offsetPuts.isNotEmpty() || toDelete.isNotEmpty()) {
+                    memoryOffsetCache.putAll(offsetPuts)
+                    toDelete.forEach { memoryOffsetCache.remove(it) }
+                    positioningPrefs.edit().apply {
+                        offsetPuts.forEach { (id, offset) -> putFloat(id, offset) }
+                        toDelete.forEach { remove(it) }
+                    }.apply()
+                }
+
+                // 4. Persist removals back to the index.
+                if (removedAny) {
+                    updateFolderMetadataIndex(rootDoc)
+                }
+                // Only wake the live wallpaper when its image was actually
+                // removed; a pure import doesn't change the current image,
+                // and the reload would decode a full image during grid load.
+                if (currentId.isNotBlank() && currentId in toDelete) {
+                    notifyWallpaperChanged()
+                }
             }
-            }
-            // Automatically optimize library images (4K max, WebP) in the background by default
-            refreshOptimizationProgress()
-            CoroutineScope(Dispatchers.IO).launch { compressUnoptimizedWallpapers() }
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error syncing and loading from selected folder", e)
         }
@@ -1672,12 +1071,10 @@ class WallpaperRepository(
             val folderUri = Uri.parse(folderUriString)
             val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext
 
-            // Ensure .nomedia in root folder to prevent cluttering recent files in files app
             if (rootDoc.findFile(".nomedia") == null) {
                 try {
                     rootDoc.createFile("application/octet-stream", ".nomedia")
                 } catch (e: Exception) {
-                    // Ignore
                 }
             }
 
@@ -1687,18 +1084,13 @@ class WallpaperRepository(
                 subDir = rootDoc.createDirectory(subfolderName) ?: return@withContext
             }
 
-            // Ensure .nomedia in subfolder
             if (subDir.findFile(".nomedia") == null) {
                 try {
                     subDir.createFile("application/octet-stream", ".nomedia")
                 } catch (e: Exception) {
-                    // Ignore
                 }
             }
 
-            // Reuse an existing library file for this ID in any image
-            // extension (including an already-optimized .webp) instead of
-            // downloading a second large original next to it.
             var targetFile = subDir.listFiles().firstOrNull { f ->
                 if (f.isDirectory) false
                 else {
@@ -1707,14 +1099,12 @@ class WallpaperRepository(
                 }
             }
             if (targetFile == null) {
-                // Determine extension (.png or .jpg) from url
                 val isPng = fav.url.endsWith(".png", ignoreCase = true)
                 val extension = if (isPng) ".png" else ".jpg"
                 val mimeType = if (isPng) "image/png" else "image/jpeg"
                 val fileName = "${fav.id}$extension"
                 targetFile = subDir.createFile(mimeType, fileName)
                 if (targetFile != null) {
-                    // Stream the original untouched full-resolution file from wallhaven
                     val request = Request.Builder().url(fav.url).build()
                     val response = NetworkClient.okHttpClient.newCall(request).execute()
                     response.body?.byteStream()?.use { inputStream ->
@@ -1725,41 +1115,94 @@ class WallpaperRepository(
                 }
             }
 
-            // Generate/cache internal thumbnail in app internal storage (not in user folder)
-            val internalThumb = generateInternalThumbnail(
-                id = fav.id,
-                sourceUri = targetFile?.uri,
-                sourceUrl = fav.url
-            )
-            if (internalThumb.isNotBlank() && internalThumb != fav.thumbUrl) {
-                // Targeted UPDATE preserves any offset updated after the
-                // caller snapshot was taken (see sync thumbnail branch).
-                favoriteDao.updateThumbUrlAndLocalPath(
-                    fav.id,
-                    internalThumb,
-                    targetFile?.uri?.toString()
-                )
+            if (targetFile != null) {
+                try {
+                    favoriteDao.updateLocalFilePath(fav.id, targetFile.uri.toString())
+                } catch (e: Exception) {
+                    Log.e("WallpaperRepo", "Error updating local path for ${fav.id}", e)
+                }
             }
 
-            // Update metadata index.json in the root folder
             folderMutex.withLock {
                 updateFolderMetadataIndex(rootDoc)
             }
 
-            // Optimize newly saved wallpaper in background (4K max, WebP) by
-            // default. This covers favorites added from Discover, since
-            // toggleFavorite() funnels through saveWallpaperToLocalFolder().
+            // Optimize only the newly added file (never a bulk pass).
             val savedFile = targetFile
             if (savedFile != null) {
                 CoroutineScope(Dispatchers.IO).launch {
                     optimizeSingleWallpaperFile(savedFile, fav.id, subDir)
-                    compressUnoptimizedWallpapers()
                 }
-            } else {
-                refreshOptimizationProgress()
             }
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error saving wallpaper to user folder", e)
+        }
+    }
+
+    /**
+     * Applies portable top-level index fields (schedule interval + SFW/NSFW
+     * filters) to preferences. Missing/invalid fields keep current prefs.
+     * API key / schedule-enabled are deliberately ignored: the key is a
+     * secret that must never sit in a shared/cloud folder, and enabled is
+     * device-specific state.
+     */
+    private suspend fun applyIndexMetadata(rootJson: JSONObject) {
+        try {
+            if (rootJson.has("scheduleIntervalMinutes")) {
+                val interval = rootJson.optInt("scheduleIntervalMinutes", -1)
+                if (interval in 1..1440) {
+                    preferences.setIntervalMinutes(interval)
+                }
+            }
+            val sfwJson = rootJson.optJSONObject("sfwFilters")
+            if (sfwJson != null) {
+                preferences.updateSfwFilters(
+                    grayscale = sfwJson.optDouble("grayscale", 0.0).toFloat().coerceIn(0f, 1f),
+                    blur = sfwJson.optDouble("blur", 0.0).toFloat().coerceIn(0f, 0.1f),
+                    brightness = sfwJson.optDouble("brightness", 1.0).toFloat().coerceIn(0f, 1f),
+                    vignette = sfwJson.optDouble("vignette", 0.0).toFloat().coerceIn(0f, 1f)
+                )
+            }
+            val nsfwJson = rootJson.optJSONObject("nsfwFilters")
+            if (nsfwJson != null) {
+                preferences.updateNsfwFilters(
+                    grayscale = nsfwJson.optDouble("grayscale", 0.0).toFloat().coerceIn(0f, 1f),
+                    blur = nsfwJson.optDouble("blur", 0.0).toFloat().coerceIn(0f, 0.1f),
+                    brightness = nsfwJson.optDouble("brightness", 1.0).toFloat().coerceIn(0f, 1f),
+                    vignette = nsfwJson.optDouble("vignette", 0.0).toFloat().coerceIn(0f, 1f)
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error applying index metadata", e)
+        }
+    }
+
+    /**
+     * Rewrites index.json from current DB + preferences (used after
+     * settings-only changes such as filter/interval edits, which don't
+     * otherwise trigger an index write). No-op if no folder is selected.
+     * Skips the write if folderMutex is busy — the ongoing sync already
+     * rewrites with the latest prefs.
+     */
+    suspend fun refreshFolderIndex() = withContext(Dispatchers.IO) {
+        val folderUriString = try {
+            preferences.localFolderUriFlow.first()
+        } catch (e: Exception) {
+            return@withContext
+        }
+        if (folderUriString.isBlank()) return@withContext
+        try {
+            val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(folderUriString)) ?: return@withContext
+            if (!rootDoc.exists() || !rootDoc.canWrite()) return@withContext
+            if (folderMutex.tryLock()) {
+                try {
+                    updateFolderMetadataIndex(rootDoc)
+                } finally {
+                    folderMutex.unlock()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error refreshing index.json", e)
         }
     }
 
@@ -1770,55 +1213,18 @@ class WallpaperRepository(
                 indexFile = rootDoc.createFile("application/json", "index.json") ?: return
             }
 
-            // Read back the offsets currently stored on disk so a stale or
-            // placeholder DB row can never overwrite a valid index value.
-            // Priority is cached (most-recent intentional/detected value)
-            // > existing index.json (source of truth on folder load)
-            // > DB row > 0.5. Previously the DB row always won because its
-            // 0.5 default is in 0f..1f, which made the cached-offset fallback
-            // dead code and reset user-edited index offsets to 0.5 whenever
-            // this ran concurrently with folder load.
-            val existingOffsets = mutableMapOf<String, Float>()
-            try {
-                if (indexFile.exists()) {
-                    val jsonString = context.contentResolver.openInputStream(indexFile.uri)?.use { stream ->
-                        stream.bufferedReader().use { it.readText() }
-                    }
-                    if (!jsonString.isNullOrBlank()) {
-                        val existingRoot = JSONObject(jsonString)
-                        val existingArray = existingRoot.optJSONArray("wallpapers")
-                        if (existingArray != null) {
-                            for (i in 0 until existingArray.length()) {
-                                val existingItem = existingArray.getJSONObject(i)
-                                val existingId = existingItem.optString("id")
-                                if (existingId.isNotBlank() && existingItem.has("horizontalOffset")) {
-                                    val raw = existingItem.optDouble("horizontalOffset", Double.NaN)
-                                    if (!raw.isNaN() && raw in 0.0..1.0) {
-                                        existingOffsets[existingId] = raw.toFloat()
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w("WallpaperRepo", "Could not read existing index.json offsets before updating", e)
-            }
-
-            val allFavs = favoriteDao.getAllFavoriteIds()
+            val allFavs = favoriteDao.getAllFavoritesDirect()
             val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
+            val intervalMinutes = preferences.intervalMinutesFlow.first()
+            val sfwFilters = preferences.sfwFilterFlow.first()
+            val nsfwFilters = preferences.nsfwFilterFlow.first()
             val jsonArray = JSONArray()
-            for (id in allFavs) {
-                val fav = favoriteDao.getFavoriteById(id) ?: continue
+            for (fav in allFavs) {
                 val itemObj = JSONObject().apply {
                     put("id", fav.id)
                     put("purity", fav.purity)
                     put("category", fav.category)
-                    val offsetToPersist = getCachedOffset(fav.id)
-                        ?: existingOffsets[fav.id]
-                        ?: fav.horizontalOffset.takeIf { it in 0f..1f }
-                        ?: 0.5f
-                    put("horizontalOffset", offsetToPersist.toDouble())
+                    put("horizontalOffset", fav.horizontalOffset.toDouble())
                     put("url", fav.url)
                     put("timestamp", fav.addedTimestamp)
                     put("optimized", optimizedIds.contains(fav.id))
@@ -1829,6 +1235,19 @@ class WallpaperRepository(
             val rootJson = JSONObject().apply {
                 put("updatedAt", System.currentTimeMillis())
                 put("count", jsonArray.length())
+                put("scheduleIntervalMinutes", intervalMinutes)
+                put("sfwFilters", JSONObject().apply {
+                    put("grayscale", sfwFilters.grayscale.toDouble())
+                    put("blur", sfwFilters.blur.toDouble())
+                    put("brightness", sfwFilters.brightness.toDouble())
+                    put("vignette", sfwFilters.vignette.toDouble())
+                })
+                put("nsfwFilters", JSONObject().apply {
+                    put("grayscale", nsfwFilters.grayscale.toDouble())
+                    put("blur", nsfwFilters.blur.toDouble())
+                    put("brightness", nsfwFilters.brightness.toDouble())
+                    put("vignette", nsfwFilters.vignette.toDouble())
+                })
                 put("wallpapers", jsonArray)
             }
 

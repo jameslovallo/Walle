@@ -24,15 +24,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Compress
-import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -43,14 +38,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,7 +55,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.ui.WallEUIState
 import com.example.ui.WallEViewModel
 import com.example.wallpaper.WallELiveWallpaperService
@@ -78,6 +72,17 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isLiveWallpaperSet by remember { mutableStateOf(isThisLiveWallpaperSet(context)) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isLiveWallpaperSet = isThisLiveWallpaperSet(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val isNsfw = uiState.isNsfwMode
     val activeFilters = if (isNsfw) uiState.nsfwFilters else uiState.sfwFilters
 
@@ -162,20 +167,22 @@ fun SettingsScreen(
                     )
                 }
 
-                // Apply Live Wallpaper Button
-                Button(
-                    onClick = {
-                        applyLiveWallpaper(context)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("apply_live_wallpaper_button"),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(Icons.Default.Wallpaper, contentDescription = null)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text("Set Live Wallpaper")
+                // Apply Live Wallpaper Button (hidden once already set)
+                if (!isLiveWallpaperSet) {
+                    Button(
+                        onClick = {
+                            applyLiveWallpaper(context)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("apply_live_wallpaper_button"),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.Wallpaper, contentDescription = null)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text("Set Live Wallpaper")
+                    }
                 }
 
                 // Automatic Schedule Status & Toggle
@@ -455,22 +462,6 @@ fun SettingsScreen(
                             .testTag("blur_slider")
                     )
                 }
-
-                // Reset to Defaults Button
-                OutlinedButton(
-                    onClick = {
-                        viewModel.resetFilters()
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("reset_filters_button"),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(Icons.Default.RestartAlt, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Reset Filters")
-                }
             }
         }
 
@@ -579,6 +570,16 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+private fun isThisLiveWallpaperSet(context: Context): Boolean {
+    return try {
+        val wallpaperManager = context.getSystemService(Context.WALLPAPER_SERVICE) as? WallpaperManager
+        val info = wallpaperManager?.wallpaperInfo ?: return false
+        info.packageName == context.packageName
+    } catch (_: Exception) {
+        false
     }
 }
 

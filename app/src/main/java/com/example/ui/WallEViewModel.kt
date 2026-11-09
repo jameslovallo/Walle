@@ -11,6 +11,7 @@ import com.example.data.model.ModeFilterSettings
 import com.example.data.model.Wallpaper
 import com.example.worker.WallpaperIntervalWorker
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -38,14 +39,6 @@ data class WallEUIState(
     val discoverTotal: Int = 0,
     val discoverHasReachedEnd: Boolean = false,
     val searchGeneration: Int = 0,
-    // Legacy tags & mode filters
-    val savedSfwTags: Set<String> = emptySet(),
-    val activeSfwTags: Set<String> = emptySet(),
-    val savedNsfwTags: Set<String> = emptySet(),
-    val activeNsfwTags: Set<String> = emptySet(),
-    val nsfwPurity: String = "both",
-    val sfwCategory: String = "all",
-    val nsfwCategory: String = "people",
     val sfwFilters: ModeFilterSettings = ModeFilterSettings(),
     val nsfwFilters: ModeFilterSettings = ModeFilterSettings(),
     val apiKey: String = "",
@@ -54,13 +47,7 @@ data class WallEUIState(
     val isScheduleEnabled: Boolean = true,
     val isSlideshowPaused: Boolean = false,
     val isFavoritesLoading: Boolean = false,
-    // Library optimization (always on by default: 4K max, WebP)
-    val optimizationOptimized: Int = 0,
-    val optimizationTotal: Int = 0,
-    val isOptimizingLibrary: Boolean = false,
-    val optimizationFailed: Int = 0,
-    val optimizationLastError: String = "",
-    val isCalculatingAiOffset: Boolean = false
+    val isModalDragging: Boolean = false
 )
 
 class WallEViewModel(application: Application) : AndroidViewModel(application) {
@@ -78,7 +65,9 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         _pendingRemovedFavoriteIds
     ) { favList, removedIds ->
         if (removedIds.isEmpty()) favList else favList.filter { it.id !in removedIds }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // 30s keeps the DB observer warm across quick tab switches so returning
+    // to Favorites doesn't re-query the whole library (looked like a reload).
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(30_000), emptyList())
 
     private val _uiState = MutableStateFlow(WallEUIState())
     val uiState: StateFlow<WallEUIState> = _uiState.asStateFlow()
@@ -121,27 +110,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 repository.fetchAndApplyInitialWallpaper(isNsfw, targetTag)
                 _uiState.value = _uiState.value.copy(isLoading = false)
             }
-        }
-        viewModelScope.launch {
-            repository.savedSfwTags.collect { tags -> _uiState.value = _uiState.value.copy(savedSfwTags = tags) }
-        }
-        viewModelScope.launch {
-            repository.activeSfwTags.collect { tags -> _uiState.value = _uiState.value.copy(activeSfwTags = tags) }
-        }
-        viewModelScope.launch {
-            repository.savedNsfwTags.collect { tags -> _uiState.value = _uiState.value.copy(savedNsfwTags = tags) }
-        }
-        viewModelScope.launch {
-            repository.activeNsfwTags.collect { tags -> _uiState.value = _uiState.value.copy(activeNsfwTags = tags) }
-        }
-        viewModelScope.launch {
-            repository.nsfwPurity.collect { purity -> _uiState.value = _uiState.value.copy(nsfwPurity = purity) }
-        }
-        viewModelScope.launch {
-            repository.sfwCategory.collect { cat -> _uiState.value = _uiState.value.copy(sfwCategory = cat) }
-        }
-        viewModelScope.launch {
-            repository.nsfwCategory.collect { cat -> _uiState.value = _uiState.value.copy(nsfwCategory = cat) }
         }
         viewModelScope.launch {
             repository.sfwFilters.collect { filters -> _uiState.value = _uiState.value.copy(sfwFilters = filters) }
@@ -205,27 +173,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 discoverQuery = initialQuery
             )
             performSearch(initialQuery)
-        }
-
-        // Library optimization progress (always on by default: 4K max, WebP)
-        viewModelScope.launch {
-            repository.optimizationProgress.collect { progress ->
-                _uiState.value = _uiState.value.copy(
-                    optimizationOptimized = progress.optimized,
-                    optimizationTotal = progress.total,
-                    isOptimizingLibrary = progress.isRunning,
-                    optimizationFailed = progress.failed,
-                    optimizationLastError = progress.lastError
-                )
-            }
-        }
-        // Refresh progress and start background optimization on launch
-        viewModelScope.launch {
-            repository.refreshOptimizationProgress()
-            val progress = repository.optimizationProgress.value
-            if (progress.total > progress.optimized) {
-                repository.compressUnoptimizedWallpapers()
-            }
         }
     }
 
@@ -318,6 +265,17 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         performSearch()
     }
 
+    private var offsetPersistJob: Job? = null
+
+    /**
+     * Flags the Now Playing drag session so background work (Discover face
+     * detection) pauses and never competes with the finger.
+     */
+    fun setModalDragging(dragging: Boolean) {
+        if (_uiState.value.isModalDragging == dragging) return
+        _uiState.value = _uiState.value.copy(isModalDragging = dragging)
+    }
+
     /**
      * Internal helper keeping the Discover grid in sync with the canonical offset.
      * Grid views are read-only; the offset itself is only changed from Now Playing.
@@ -334,10 +292,12 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Single canonical entry point for manual positioning updates.
-     * Called only from the Now Playing view drag handler. Persists to cache,
-     * Room (for favorites), and the live current-wallpaper preferences, then
-     * broadcasts so the home-screen live wallpaper redraws immediately.
-     * Also updates the Discover grid in memory so it never shows a stale offset.
+     * Called only from the Now Playing view drag handler, once on drag end.
+     *
+     * UI state updates immediately (cheap CoState copy); all I/O (cache,
+     * Room, DataStore, SAF index, broadcast) is debounced and coalesced in
+     * a single cancellable job so rapid drag-repeats never queue up behind
+     * sync/background work nor block the next drag start.
      */
     fun updateCurrentWallpaperOffset(offset: Float) {
         val clamped = offset.coerceIn(0f, 1f)
@@ -348,7 +308,9 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             currentWallpaper = current.copy(horizontalOffset = clamped)
         )
         syncDiscoverOffset(id, clamped)
-        viewModelScope.launch {
+        offsetPersistJob?.cancel()
+        offsetPersistJob = viewModelScope.launch {
+            delay(200)
             repository.setCachedOffset(id, clamped)
             repository.updateCropOffset(id, clamped)
             preferences.updateCurrentWallpaperOffset(clamped)
@@ -368,15 +330,12 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun lazyDetectOffset(wallpaper: Wallpaper) {
+        // Only Discover items that are not favorites get face detection.
+        // Favorites already have their offset from the index/DB.
+        // Never start detection while the Now Playing drag is active —
+        // bitmap decode + ML Kit would steal the drag's frame budget.
+        if (wallpaper.isFavorite || _uiState.value.isModalDragging) return
         viewModelScope.launch {
-            if (repository.isOffsetCached(wallpaper.id)) {
-                val cached = repository.getCachedOffset(wallpaper.id) ?: 0.5f
-                val currentList = _uiState.value.discoverWallpapers
-                val updated = currentList.map { if (it.id == wallpaper.id) it.copy(horizontalOffset = cached) else it }
-                _uiState.value = _uiState.value.copy(discoverWallpapers = updated)
-                return@launch
-            }
-
             val detected = repository.lazyDetectOffset(
                 wallpaper.id,
                 wallpaper.thumbUrl.ifBlank { wallpaper.fullUrl }
@@ -433,40 +392,21 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         val nextPurity = "both"
         val nextQuery = if (nextMode) "model" else "nature"
         viewModelScope.launch {
-            preferences.setNsfwMode(nextMode)
             _uiState.value = _uiState.value.copy(
                 isNsfwMode = nextMode,
                 discoverCategory = nextCat,
                 discoverPurity = nextPurity,
                 discoverQuery = nextQuery
             )
-            performSearch(nextQuery)
-        }
-    }
-
-    fun fetchNextWallpaper() {
-        viewModelScope.launch {
+            // Immediately apply a wallpaper from the new category (same as
+            // the Quick Settings tile), then refresh Discover results.
             _uiState.value = _uiState.value.copy(isLoading = true)
-            repository.applyNextScheduledFavoriteWallpaper()
-            _uiState.value = _uiState.value.copy(isLoading = false)
-        }
-    }
-
-    fun setNsfwPurity(purity: String) {
-        viewModelScope.launch {
-            preferences.setNsfwPurity(purity)
-            setDiscoverPurity(purity)
-        }
-    }
-
-    fun setCategory(category: String) {
-        viewModelScope.launch {
-            if (_uiState.value.isNsfwMode) {
-                preferences.setNsfwCategory(category)
-            } else {
-                preferences.setSfwCategory(category)
+            try {
+                repository.switchModeAndApply(nextMode)
+            } finally {
+                _uiState.value = _uiState.value.copy(isLoading = false)
             }
-            setDiscoverCategory(category)
+            performSearch(nextQuery)
         }
     }
 
@@ -498,24 +438,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun recalculateCurrentWallpaperAIPositioning() {
-        val current = _uiState.value.currentWallpaper
-        if (current.id.isBlank()) return
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isCalculatingAiOffset = true)
-            try {
-                val fav = repository.getFavoriteById(current.id)
-                val source = fav?.localFilePath ?: current.url.ifBlank { current.thumbUrl }
-                val detected = repository.detectFaceOffset(source)
-                updateCurrentWallpaperOffset(detected)
-            } catch (e: Exception) {
-                android.util.Log.e("WallEViewModel", "Error recalculating AI positioning for ${current.id}", e)
-            } finally {
-                _uiState.value = _uiState.value.copy(isCalculatingAiOffset = false)
-            }
-        }
-    }
-
     fun applyFavoriteAsCurrent(fav: FavoriteWallpaper) {
         viewModelScope.launch {
             // Tapping a favorite applies it as the current wallpaper and disables the schedule until re-enabled
@@ -537,6 +459,17 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private var indexRefreshJob: Job? = null
+
+    /** Debounced index rewrite after settings-only changes (filters/slider ticks). */
+    private fun scheduleIndexRefresh() {
+        indexRefreshJob?.cancel()
+        indexRefreshJob = viewModelScope.launch {
+            delay(500)
+            repository.refreshFolderIndex()
+        }
+    }
+
     fun updateFilters(grayscale: Float, blur: Float, brightness: Float, vignette: Float) {
         viewModelScope.launch {
             if (_uiState.value.isNsfwMode) {
@@ -545,16 +478,8 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
                 preferences.updateSfwFilters(grayscale, blur, brightness, vignette)
             }
             repository.notifyWallpaperChanged()
+            scheduleIndexRefresh()
         }
-    }
-
-    fun resetFilters() {
-        updateFilters(
-            grayscale = 0.0f,
-            blur = 0.0f,
-            brightness = 1.0f,
-            vignette = 0.0f
-        )
     }
 
     fun setApiKey(key: String) {
@@ -569,6 +494,7 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             preferences.setScheduleEnabled(true)
             preferences.setIntervalMinutes(minutes)
             WallpaperIntervalWorker.scheduleNext(context, minutes)
+            scheduleIndexRefresh()
         }
     }
 
@@ -577,7 +503,6 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
             preferences.setLocalFolderUri(uri)
             if (uri.isNotBlank()) {
                 loadFavoritesFromFolder(uri)
-                startLibraryOptimization()
             }
         }
     }
@@ -611,24 +536,4 @@ class WallEViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Starts background library optimization (4K max, WebP) by default.
-     * Used when a new folder is selected or progress needs refreshing.
-     */
-    fun startLibraryOptimization() {
-        viewModelScope.launch {
-            try {
-                repository.refreshOptimizationProgress()
-                val progress = repository.optimizationProgress.value
-                if (progress.total > progress.optimized || progress.isRunning) {
-                    repository.compressUnoptimizedWallpapers()
-                } else {
-                    // No folder yet or already complete; still call so progress resets cleanly
-                    repository.compressUnoptimizedWallpapers()
-                }
-            } catch (e: Exception) {
-                // Optimizer already logs; UI progress will reflect last known state
-            }
-        }
-    }
 }

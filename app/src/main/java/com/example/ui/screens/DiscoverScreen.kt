@@ -43,15 +43,12 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.ui.res.painterResource
-import com.example.R
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -187,7 +184,9 @@ fun DiscoverScreen(
                                 onOpenNowPlaying()
                             },
                             onAppear = {
-                                viewModel.lazyDetectOffset(wallpaper)
+                                if (!wallpaper.isFavorite) {
+                                    viewModel.lazyDetectOffset(wallpaper)
+                                }
                             }
                         )
                     }
@@ -444,10 +443,10 @@ fun DiscoverWallpaperCard(
             .clickable { onCardClick() }
             .testTag("discover_card_${wallpaper.id}")
     ) {
-        // Image rendered with detected/stored positioning offset; horizontal dragging is disabled in grid for smooth scrolling
+        // Whole image only (no thumbnails).
         PositionedWallpaperImage(
-            url = wallpaper.thumbUrl.ifBlank { wallpaper.fullUrl },
-            fallbackUrl = wallpaper.fullUrl,
+            url = wallpaper.fullUrl,
+            fallbackUrl = wallpaper.thumbUrl,
             horizontalOffset = wallpaper.horizontalOffset,
             modifier = Modifier.fillMaxSize()
         )
@@ -470,7 +469,7 @@ fun DiscoverWallpaperCard(
             )
         }
 
-        // Bottom-Right: Favorite Button (Broken heart if favorited, heart if not)
+        // Bottom-Right: Favorite Button (filled heart if favorited, outlined if not)
         val isFav = wallpaper.isFavorite
         IconButton(
             onClick = onToggleFavorite,
@@ -478,26 +477,15 @@ fun DiscoverWallpaperCard(
                 .align(Alignment.BottomEnd)
                 .padding(8.dp)
                 .size(40.dp)
-                .background(
-                    if (isFav) Color(0xFFE53935) else Color.Black.copy(alpha = 0.55f),
-                    CircleShape
-                )
+                .background(Color.Black.copy(alpha = 0.55f), CircleShape)
                 .testTag("fav_button_${wallpaper.id}"),
             colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
         ) {
-            if (isFav) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_favorite_broken),
-                    contentDescription = "Remove Favorite",
-                    modifier = Modifier.size(20.dp)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Favorite,
-                    contentDescription = "Add Favorite",
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            Icon(
+                imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (isFav) "Remove Favorite" else "Add Favorite",
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

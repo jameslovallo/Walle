@@ -37,15 +37,8 @@ class WallEModeTileService : TileService() {
         serviceScope.launch {
             val currentMode = preferences.isNsfwModeFlow.first()
             val newMode = !currentMode
-            preferences.setNsfwMode(newMode)
             updateTileDisplay(newMode)
-
-            // Apply a saved favorite for the new mode immediately.
-            // Fall back to a fresh fetch only if no favorites exist for that mode.
-            val favoriteResult = repository.applyNextScheduledFavoriteWallpaper()
-            if (favoriteResult.isFailure) {
-                repository.fetchAndApplyNextWallpaper()
-            }
+            repository.switchModeAndApply(newMode)
         }
     }
 

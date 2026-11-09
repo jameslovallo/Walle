@@ -227,64 +227,6 @@ object WallpaperRenderHelper {
     }
 
     /**
-     * Draws the red heart or broken heart feedback icon on the launcher,
-     * consistent with the Material Design icons used in the app.
-     */
-    fun drawHeartFeedback(
-        canvas: Canvas,
-        x: Float,
-        y: Float,
-        isFavorited: Boolean,
-        progress: Float // 0f (start) to 1f (end)
-    ) {
-        val alpha = ((1.0f - progress).coerceIn(0f, 1f) * 255).toInt()
-        val scale = 1.0f + 0.35f * progress
-        val baseSize = 88f * scale
-
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#E53935") // Material Red 600
-            this.alpha = alpha
-            style = Paint.Style.FILL
-        }
-
-        canvas.save()
-        canvas.translate(x, y)
-
-        // Material Design Favorite 24x24 icon path
-        val materialHeartPathData = "M12,21.35L10.55,20.03C5.4,15.36 2,12.28 2,8.5C2,5.42 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.09C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.42 22,8.5C22,12.28 18.6,15.36 13.45,20.04L12,21.35Z"
-        val path = PathParser.createPathFromPathData(materialHeartPathData)
-        val s = baseSize / 24f
-        val matrix = Matrix().apply {
-            postTranslate(-12f, -12f)
-            postScale(s, s)
-        }
-        path.transform(matrix)
-
-        canvas.drawPath(path, paint)
-
-        if (!isFavorited) {
-            // Draw clean lightning crack through center for broken heart
-            val crackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                this.alpha = alpha
-                strokeWidth = 3.5f * s
-                style = Paint.Style.STROKE
-                strokeCap = Paint.Cap.ROUND
-                strokeJoin = Paint.Join.ROUND
-            }
-            val crack = Path()
-            crack.moveTo(0f, -8f * s)
-            crack.lineTo(-3f * s, -2f * s)
-            crack.lineTo(2f * s, 3f * s)
-            crack.lineTo(-1f * s, 8f * s)
-            crack.lineTo(0f, 11f * s)
-            canvas.drawPath(crack, crackPaint)
-        }
-
-        canvas.restore()
-    }
-
-    /**
      * Stack Blur Algorithm for Android Bitmaps.
      */
     fun fastBlur(sentBitmap: Bitmap, radius: Int): Bitmap {

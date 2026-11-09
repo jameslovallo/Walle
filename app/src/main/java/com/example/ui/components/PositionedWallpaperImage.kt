@@ -1,10 +1,9 @@
+
 package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -19,28 +18,30 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
+import coil.request.CachePolicy
 import coil.request.ImageRequest
 
 /**
- * Robust wallpaper image component that fills the aspect-ratio frame,
- * scales the uncropped image with ContentScale.Crop, and aligns it horizontally
- * according to horizontalOffset (0f = left, 0.5f = center, 1f = right).
- * Supports horizontal dragging to adjust the offset smoothly in real time,
- * saving positioning data only when the user finishes dragging.
- * Supports optional onTap callback for tapping actions.
+ * Wallpaper image with horizontal crop positioning.
+ *
+ * Stateless w.r.t. offset: [horizontalOffset] is the single source of truth.
+ * Dragging reports incremental offsets via [onDrag] / [onDragEnd] without
+ * internal duplicate state, so the caller owns the offset and the image
+ * never resets its position underneath the gesture.
  */
 @Composable
 fun PositionedWallpaperImage(
@@ -51,6 +52,7 @@ fun PositionedWallpaperImage(
     onTap: (() -> Unit)? = null,
     onDrag: ((Float) -> Unit)? = null,
     onDragEnd: ((Float) -> Unit)? = null,
+    onDragStart: (() -> Unit)? = null,
     onLoadComplete: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -65,29 +67,32 @@ fun PositionedWallpaperImage(
         }
     }
 
-    // Map localOffset (0.0 .. 1.0) to horizontalBias (-1.0 .. 1.0)
     val effectiveOffset = if (horizontalOffset in 0f..1f) horizontalOffset else 0.5f
-    var localOffset by remember(horizontalOffset) { mutableFloatStateOf(effectiveOffset) }
-    val biasX = (localOffset * 2f - 1f)
+    val biasX = (effectiveOffset * 2f - 1f)
+    // Keep callbacks fresh without restarting the gesture detector.
+    val currentOffset by rememberUpdatedState(effectiveOffset)
+    val currentOnDrag by rememberUpdatedState(onDrag)
+    val currentOnDragEnd by rememberUpdatedState(onDragEnd)
+    val currentOnDragStart by rememberUpdatedState(onDragStart)
+    val currentOnTap by rememberUpdatedState(onTap)
+    var boxWidthPx by remember { mutableStateOf(0f) }
+
+    val showDrag = onDrag != null || onDragEnd != null || onDragStart != null
 
     Box(
         modifier = modifier
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .onSizeChanged { boxWidthPx = it.width.toFloat() }
             .then(
-                if (onTap != null) {
-                    Modifier.pointerInput(activeUrl) {
-                        detectTapGestures(onTap = { onTap() })
-                    }
-                } else Modifier
-            )
-            .then(
-                if (onDragEnd != null || onDrag != null) {
+                if (showDrag || onTap != null) {
+                    // Single detector handles tap + drag so they never compete.
                     Modifier.pointerInput(activeUrl) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             var totalDx = 0f
                             var totalDy = 0f
                             var isLockedHorizontal: Boolean? = null
+                            var isDragging = false
 
                             do {
                                 val event = awaitPointerEvent()
@@ -100,34 +105,40 @@ fun PositionedWallpaperImage(
 
                                     if (isLockedHorizontal == null) {
                                         val dist = Math.hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
-                                        val touchSlop = viewConfiguration.touchSlop
-                                        if (dist > touchSlop) {
-                                            // Angle from horizontal in degrees: 0 deg is pure horizontal, 90 deg is pure vertical
-                                            val angleRad = atan2(abs(totalDy).toDouble(), abs(totalDx).toDouble())
-                                            val angleDeg = Math.toDegrees(angleRad)
-                                            // Strictly horizontal motion, with 30 degrees of tolerance away from horizontal
+                                        if (dist > viewConfiguration.touchSlop) {
+                                            val angleDeg = Math.toDegrees(
+                                                atan2(abs(totalDy).toDouble(), abs(totalDx).toDouble())
+                                            )
                                             if (angleDeg <= 30.0) {
                                                 isLockedHorizontal = true
                                                 change.consume()
-                                                val delta = totalDx / 320f
-                                                localOffset = (localOffset - delta).coerceIn(0f, 1f)
-                                                onDrag?.invoke(localOffset)
+                                                isDragging = true
+                                                currentOnDragStart?.invoke()
+                                                // First move: apply the accumulated slop-cleared motion
+                                                // in one step using incremental pixels.
+                                                val width = boxWidthPx.takeIf { it > 0f } ?: 320f
+                                                val delta = totalDx / width
+                                                val next = (currentOffset - delta).coerceIn(0f, 1f)
+                                                currentOnDrag?.invoke(next)
                                             } else {
-                                                // Vertical motion: yield to parent LazyVerticalGrid
                                                 isLockedHorizontal = false
                                             }
                                         }
                                     } else if (isLockedHorizontal == true) {
                                         change.consume()
-                                        val delta = dragDelta.x / 320f
-                                        localOffset = (localOffset - delta).coerceIn(0f, 1f)
-                                        onDrag?.invoke(localOffset)
+                                        val width = boxWidthPx.takeIf { it > 0f } ?: 320f
+                                        val delta = dragDelta.x / width
+                                        val next = (currentOffset - delta).coerceIn(0f, 1f)
+                                        currentOnDrag?.invoke(next)
                                     }
                                 }
                             } while (event.changes.any { it.pressed })
 
-                            if (isLockedHorizontal == true) {
-                                onDragEnd?.invoke(localOffset)
+                            if (isDragging) {
+                                currentOnDragEnd?.invoke(currentOffset)
+                            } else if (isLockedHorizontal != true) {
+                                // No horizontal lock was acquired: treat as tap.
+                                currentOnTap?.invoke()
                             }
                         }
                     }
@@ -136,11 +147,22 @@ fun PositionedWallpaperImage(
         contentAlignment = Alignment.Center
     ) {
         if (activeUrl.isNotBlank()) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
+            // Remembered so every drag frame reuses the same request object
+            // instead of rebuilding (and re-dispatching) a new ImageRequest.
+            // Subsampled to grid/modal size (still the whole image — just
+            // decoded at display size, not full 4K) and no crossfade so
+            // large libraries don't pay fade animations per card.
+            val request = remember(activeUrl) {
+                ImageRequest.Builder(context)
                     .data(activeUrl)
-                    .crossfade(true)
-                    .build(),
+                    .size(720, 1280)
+                    .crossfade(false)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
+                    .build()
+            }
+            AsyncImage(
+                model = request,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 alignment = BiasAlignment(biasX, 0f),

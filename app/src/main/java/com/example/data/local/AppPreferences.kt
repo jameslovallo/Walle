@@ -35,10 +35,8 @@ class AppPreferences(private val context: Context) {
         val KEY_NSFW_BRIGHTNESS = floatPreferencesKey("nsfw_brightness")
         val KEY_NSFW_VIGNETTE = floatPreferencesKey("nsfw_vignette")
 
-        // Tags
-        val KEY_SAVED_SFW_TAGS = stringSetPreferencesKey("saved_sfw_tags")
+        // Active discovery tags (used to pick favorites vs Wallhaven fetch).
         val KEY_ACTIVE_SFW_TAGS = stringSetPreferencesKey("active_sfw_tags")
-        val KEY_SAVED_NSFW_TAGS = stringSetPreferencesKey("saved_nsfw_tags")
         val KEY_ACTIVE_NSFW_TAGS = stringSetPreferencesKey("active_nsfw_tags")
 
         // NSFW Purity: "both", "sketchy", "nsfw"
@@ -58,25 +56,13 @@ class AppPreferences(private val context: Context) {
         val KEY_CURRENT_OFFSET = floatPreferencesKey("current_offset")
         val KEY_CURRENT_TAGS = stringPreferencesKey("current_tags")
 
-        val KEY_DELETED_WALLPAPER_IDS = stringSetPreferencesKey("deleted_wallpaper_ids")
         val KEY_IS_SCHEDULE_ENABLED = booleanPreferencesKey("is_schedule_enabled")
         val KEY_IS_SLIDESHOW_PAUSED = booleanPreferencesKey("is_slideshow_paused")
-        val KEY_GITHUB_REPO = stringPreferencesKey("github_repo")
-        // Compression resolution scale: "original", "4k", "1080p", "device"
-        val KEY_MAX_RESOLUTION_SCALE = stringPreferencesKey("max_resolution_scale")
         val KEY_OPTIMIZED_WALLPAPER_IDS = stringSetPreferencesKey("optimized_wallpaper_ids")
-    }
-
-    val maxResolutionScaleFlow: Flow<String> = context.dataStore.data.map {
-        it[KEY_MAX_RESOLUTION_SCALE] ?: "original"
     }
 
     val optimizedWallpaperIdsFlow: Flow<Set<String>> = context.dataStore.data.map {
         it[KEY_OPTIMIZED_WALLPAPER_IDS] ?: emptySet()
-    }
-
-    val githubRepoFlow: Flow<String> = context.dataStore.data.map {
-        it[KEY_GITHUB_REPO] ?: "lovallo/WallHeaven"
     }
 
     val isSlideshowPausedFlow: Flow<Boolean> = context.dataStore.data.map {
@@ -85,10 +71,6 @@ class AppPreferences(private val context: Context) {
 
     val isScheduleEnabledFlow: Flow<Boolean> = context.dataStore.data.map {
         it[KEY_IS_SCHEDULE_ENABLED] ?: true
-    }
-
-    val deletedWallpaperIdsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_DELETED_WALLPAPER_IDS] ?: emptySet()
     }
 
     val isNsfwModeFlow: Flow<Boolean> = context.dataStore.data.map {
@@ -121,16 +103,8 @@ class AppPreferences(private val context: Context) {
         )
     }
 
-    val savedSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_SAVED_SFW_TAGS] ?: setOf("nature")
-    }
-
     val activeSfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
         it[KEY_ACTIVE_SFW_TAGS] ?: setOf("nature")
-    }
-
-    val savedNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
-        it[KEY_SAVED_NSFW_TAGS] ?: setOf("model")
     }
 
     val activeNsfwTagsFlow: Flow<Set<String>> = context.dataStore.data.map {
@@ -204,37 +178,6 @@ class AppPreferences(private val context: Context) {
         }
     }
 
-    suspend fun setSavedSfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_SAVED_SFW_TAGS] = tags }
-    }
-
-    suspend fun setActiveSfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_ACTIVE_SFW_TAGS] = tags }
-    }
-
-    suspend fun setSavedNsfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_SAVED_NSFW_TAGS] = tags }
-    }
-
-    suspend fun setActiveNsfwTags(tags: Set<String>) {
-        context.dataStore.edit { it[KEY_ACTIVE_NSFW_TAGS] = tags }
-    }
-
-    suspend fun setSfwTags(tags: Set<String>) = setActiveSfwTags(tags)
-    suspend fun setNsfwTags(tags: Set<String>) = setActiveNsfwTags(tags)
-
-    suspend fun setNsfwPurity(purity: String) {
-        context.dataStore.edit { it[KEY_NSFW_PURITY] = purity }
-    }
-
-    suspend fun setSfwCategory(cat: String) {
-        context.dataStore.edit { it[KEY_SFW_CATEGORY] = cat }
-    }
-
-    suspend fun setNsfwCategory(cat: String) {
-        context.dataStore.edit { it[KEY_NSFW_CATEGORY] = cat }
-    }
-
     suspend fun setLocalFolderUri(uri: String) {
         context.dataStore.edit { it[KEY_LOCAL_FOLDER_URI] = uri }
     }
@@ -277,42 +220,6 @@ class AppPreferences(private val context: Context) {
         }
     }
 
-    suspend fun updateCurrentWallpaperTags(id: String, tags: List<String>) {
-        if (id.isBlank() || tags.isEmpty()) return
-        context.dataStore.edit {
-            if (it[KEY_CURRENT_ID] == id) {
-                it[KEY_CURRENT_TAGS] = tags.joinToString(",")
-            }
-        }
-    }
-
-    suspend fun addDeletedWallpaperId(id: String) {
-        if (id.isBlank()) return
-        context.dataStore.edit {
-            val current = it[KEY_DELETED_WALLPAPER_IDS] ?: emptySet()
-            it[KEY_DELETED_WALLPAPER_IDS] = current + id
-        }
-    }
-
-    suspend fun removeDeletedWallpaperId(id: String) {
-        context.dataStore.edit {
-            val current = it[KEY_DELETED_WALLPAPER_IDS] ?: emptySet()
-            it[KEY_DELETED_WALLPAPER_IDS] = current - id
-        }
-    }
-
-    suspend fun setGithubRepo(repo: String) {
-        context.dataStore.edit {
-            it[KEY_GITHUB_REPO] = repo
-        }
-    }
-
-    suspend fun setMaxResolutionScale(scale: String) {
-        context.dataStore.edit {
-            it[KEY_MAX_RESOLUTION_SCALE] = scale
-        }
-    }
-
     suspend fun markWallpaperOptimized(id: String) {
         if (id.isBlank()) return
         context.dataStore.edit {
@@ -326,12 +233,6 @@ class AppPreferences(private val context: Context) {
         context.dataStore.edit {
             val current = it[KEY_OPTIMIZED_WALLPAPER_IDS] ?: emptySet()
             it[KEY_OPTIMIZED_WALLPAPER_IDS] = current - id
-        }
-    }
-
-    suspend fun clearOptimizedWallpapers() {
-        context.dataStore.edit {
-            it[KEY_OPTIMIZED_WALLPAPER_IDS] = emptySet()
         }
     }
 }

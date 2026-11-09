@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Favorite
@@ -38,8 +37,6 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -247,7 +244,6 @@ fun WallEApp(
                 currentWallpaper = uiState.currentWallpaper,
                 isFavorite = uiState.isCurrentFavorite,
                 isPaused = uiState.isSlideshowPaused,
-                isCalculatingAiOffset = uiState.isCalculatingAiOffset,
                 onDismiss = { showCurrentFavoriteModal = false },
                 onUnfavorite = { viewModel.toggleCurrentFavorite() },
                 onPlayPauseToggle = { viewModel.togglePlayPause() },
@@ -256,13 +252,13 @@ fun WallEApp(
                 onDragOffsetChanged = { newOffset ->
                     viewModel.updateCurrentWallpaperOffset(newOffset)
                 },
+                onDraggingChanged = { dragging ->
+                    viewModel.setModalDragging(dragging)
+                },
                 onFindSimilar = { wallpaperId ->
                     showCurrentFavoriteModal = false
                     selectedTabIndex = 1
                     viewModel.searchSimilar(wallpaperId)
-                },
-                onAiPositionClick = {
-                    viewModel.recalculateCurrentWallpaperAIPositioning()
                 }
             )
         }
@@ -274,7 +270,6 @@ fun CurrentFavoriteModalContent(
     currentWallpaper: CurrentWallpaperInfo,
     isFavorite: Boolean,
     isPaused: Boolean,
-    isCalculatingAiOffset: Boolean = false,
     onDismiss: () -> Unit,
     onUnfavorite: () -> Unit,
     onPlayPauseToggle: () -> Unit,
@@ -282,21 +277,13 @@ fun CurrentFavoriteModalContent(
     onSkipNext: () -> Unit,
     onDragOffsetChanged: (Float) -> Unit,
     onFindSimilar: (String) -> Unit,
-    onAiPositionClick: () -> Unit = {}
+    onDraggingChanged: (Boolean) -> Unit = {}
 ) {
     val displayMetrics = LocalContext.current.resources.displayMetrics
     val deviceAspect = if (displayMetrics.heightPixels > 0) {
         displayMetrics.widthPixels.toFloat() / displayMetrics.heightPixels.toFloat()
     } else {
         9f / 20f
-    }
-
-    var localOffset by remember(currentWallpaper.id, currentWallpaper.horizontalOffset) {
-        mutableFloatStateOf(currentWallpaper.horizontalOffset)
-    }
-
-    LaunchedEffect(currentWallpaper.horizontalOffset) {
-        localOffset = currentWallpaper.horizontalOffset
     }
 
     Column(
@@ -337,7 +324,9 @@ fun CurrentFavoriteModalContent(
             currentWallpaper.url.ifBlank { currentWallpaper.thumbUrl }
         }
 
-        // Preview card frame with home screen launcher overlay
+        // Preview card frame with home screen launcher overlay.
+        // Drag state lives in NowPlayingPreview so per-move recompositions
+        // touch only the image, never the header/controls/gridlines.
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.70f)
@@ -366,16 +355,13 @@ fun CurrentFavoriteModalContent(
                 val targetWp = currentWallpaper
                 val url = targetWp.url.ifBlank { targetWp.thumbUrl }
                 if (url.isNotBlank()) {
-                    PositionedWallpaperImage(
+                    NowPlayingPreview(
+                        wallpaperId = targetWp.id.ifBlank { url },
                         url = url,
                         fallbackUrl = targetWp.thumbUrl,
-                        horizontalOffset = localOffset,
-                        onDrag = { newOffset ->
-                            localOffset = newOffset
-                        },
-                        onDragEnd = {
-                            onDragOffsetChanged(localOffset)
-                        },
+                        initialOffset = targetWp.horizontalOffset,
+                        onDragOffsetChanged = onDragOffsetChanged,
+                        onDraggingChanged = onDraggingChanged,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -411,38 +397,6 @@ fun CurrentFavoriteModalContent(
                 )
             }
 
-            // AI positioning icon button at the bottom center of the bottom right corner of the image
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(1f / 3f)
-                    .align(Alignment.BottomEnd)
-                    .padding(bottom = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                IconButton(
-                    onClick = onAiPositionClick,
-                    enabled = !isCalculatingAiOffset,
-                    modifier = Modifier
-                        .size(42.dp)
-                        .background(Color.Black.copy(alpha = 0.60f), CircleShape)
-                        .testTag("modal_ai_positioning_button")
-                ) {
-                    if (isCalculatingAiOffset) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = "Apply AI Positioning",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-            }
         }
 
         // Music player style control group below the image preview
@@ -520,28 +474,68 @@ fun CurrentFavoriteModalContent(
                     )
                 }
 
-                // 5. Unfavorite button (Broken heart icon when favorited, heart when not)
+                // 5. Favorite toggle (filled heart if favorited, outlined heart if not)
                 IconButton(
                     onClick = onUnfavorite,
                     modifier = Modifier.testTag("player_unfavorite_button")
                 ) {
-                    if (isFavorite) {
-                        Icon(
-                            painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_favorite_broken),
-                            contentDescription = "Unfavorite Wallpaper",
-                            tint = Color(0xFFE53935),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.FavoriteBorder,
-                            contentDescription = "Favorite Wallpaper",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (isFavorite) "Unfavorite Wallpaper" else "Favorite Wallpaper",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
             }
         }
     }
+}
+
+/**
+ * Totally isolated drag surface for the Now Playing preview.
+ *
+ * Owns the only drag offset state in the modal (keyed by wallpaper id) so
+ * finger moves recompose just the image — never the header, gridlines, or
+ * transport controls. External offsets (AI recalc, rotation) are applied
+ * only when idle to avoid fighting the gesture. Drag start/end are reported
+ * so the ViewModel can pause background face detection while dragging;
+ * persistence itself only fires once on drag end.
+ */
+@Composable
+private fun NowPlayingPreview(
+    wallpaperId: String,
+    url: String,
+    fallbackUrl: String?,
+    initialOffset: Float,
+    onDragOffsetChanged: (Float) -> Unit,
+    onDraggingChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var dragOffset by remember(wallpaperId) { mutableFloatStateOf(initialOffset.coerceIn(0f, 1f)) }
+    var isDragging by remember(wallpaperId) { mutableStateOf(false) }
+
+    LaunchedEffect(initialOffset) {
+        if (!isDragging) {
+            dragOffset = initialOffset.coerceIn(0f, 1f)
+        }
+    }
+
+    PositionedWallpaperImage(
+        url = url,
+        fallbackUrl = fallbackUrl,
+        horizontalOffset = dragOffset,
+        onDragStart = {
+            isDragging = true
+            onDraggingChanged(true)
+        },
+        onDrag = { newOffset ->
+            dragOffset = newOffset
+        },
+        onDragEnd = {
+            isDragging = false
+            onDraggingChanged(false)
+            onDragOffsetChanged(dragOffset)
+        },
+        modifier = modifier
+    )
 }

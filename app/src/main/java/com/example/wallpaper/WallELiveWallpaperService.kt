@@ -17,7 +17,7 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import androidx.core.content.ContextCompat
-import coil.ImageLoader
+import coil.Coil
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.example.WallEApplication
@@ -42,7 +42,8 @@ class WallELiveWallpaperService : WallpaperService() {
 
     inner class WallEEngine : Engine() {
         private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        private val imageLoader by lazy { ImageLoader(this@WallELiveWallpaperService) }
+        // Shared singleton so live-wallpaper decode reuses the app cache.
+        private val imageLoader = Coil.imageLoader(this@WallELiveWallpaperService)
         private val preferences by lazy { (applicationContext as WallEApplication).preferences }
         private val repository by lazy { (applicationContext as WallEApplication).repository }
 
