@@ -43,6 +43,11 @@ class WallEApplication : Application(), ImageLoaderFactory {
                 val targetTag = if (isNsfw) "model" else "nature"
                 repository.fetchAndApplyInitialWallpaper(isNsfw, targetTag)
             }
+
+            // Background startup check: optimize any local library images that
+            // are not yet stored as WebP (e.g. favorites added before this
+            // optimization existed). Non-blocking; already-optimized files skip.
+            repository.optimizeUnoptimizedWallpaperFiles()
         }
     }
 }

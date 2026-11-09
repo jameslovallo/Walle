@@ -523,6 +523,49 @@ class WallpaperRepository(
     }
 
     /**
+     * Startup check: scans the local library folder for any images that are
+     * not yet stored as optimized WebP and optimizes them in the background.
+     * Safe to call on every launch — already-optimized files are skipped.
+     */
+    suspend fun optimizeUnoptimizedWallpaperFiles() = withContext(Dispatchers.IO) {
+        val folderUriString = preferences.localFolderUriFlow.first()
+        if (folderUriString.isBlank()) return@withContext
+
+        try {
+            val folderUri = Uri.parse(folderUriString)
+            val rootDoc = DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext
+            if (!rootDoc.exists() || !rootDoc.canRead()) return@withContext
+
+            val optimizedIds = preferences.optimizedWallpaperIdsFlow.first()
+            val dirs = listOf(
+                rootDoc.findFile("sfw") to "sfw",
+                rootDoc.findFile("nsfw") to "nsfw",
+                rootDoc to "root"
+            )
+
+            for ((dir, _) in dirs) {
+                if (dir == null || !dir.exists() || !dir.isDirectory) continue
+                for (file in dir.listFiles()) {
+                    if (file.isDirectory) continue
+                    val name = file.name ?: continue
+                    if (name.equals("index.json", ignoreCase = true)) continue
+                    val lower = name.lowercase()
+                    // Only consider images that are not already .webp.
+                    if (lower.endsWith(".webp")) continue
+                    if (!(lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png"))) continue
+
+                    val id = imageIdFromFileName(name) ?: continue
+                    if (isFileOptimized(file, id, optimizedIds)) continue
+
+                    optimizeSingleWallpaperFile(file, id, dir)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WallpaperRepo", "Error optimizing unoptimized wallpaper files on startup", e)
+        }
+    }
+
+    /**
      * Searches Wallhaven with pagination support for the Discover grid.
      */
     suspend fun searchWallpapersPaged(
@@ -1127,12 +1170,12 @@ class WallpaperRepository(
                 updateFolderMetadataIndex(rootDoc)
             }
 
-            // Optimize only the newly added file (never a bulk pass).
+            // Optimize the newly added file as part of saving so every new
+            // favorite is stored as an optimized WebP before this returns
+            // (never a bulk pass).
             val savedFile = targetFile
             if (savedFile != null) {
-                CoroutineScope(Dispatchers.IO).launch {
-                    optimizeSingleWallpaperFile(savedFile, fav.id, subDir)
-                }
+                optimizeSingleWallpaperFile(savedFile, fav.id, subDir)
             }
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error saving wallpaper to user folder", e)
