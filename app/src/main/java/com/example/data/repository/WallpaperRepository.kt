@@ -22,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1183,8 +1184,10 @@ class WallpaperRepository(
     }
 
     /**
-     * Applies portable top-level index fields (schedule interval + SFW/NSFW
-     * filters) to preferences. Missing/invalid fields keep current prefs.
+     * Applies portable top-level index fields (schedule interval) to preferences.
+     * SFW/NSFW filter values are intentionally NOT read back from the index —
+     * they live in app DataStore and are only written out to the index.
+     * Missing/invalid fields keep current prefs.
      * API key / schedule-enabled are deliberately ignored: the key is a
      * secret that must never sit in a shared/cloud folder, and enabled is
      * device-specific state.
@@ -1197,24 +1200,6 @@ class WallpaperRepository(
                     preferences.setIntervalMinutes(interval)
                 }
             }
-            val sfwJson = rootJson.optJSONObject("sfwFilters")
-            if (sfwJson != null) {
-                preferences.updateSfwFilters(
-                    grayscale = sfwJson.optDouble("grayscale", 0.0).toFloat().coerceIn(0f, 1f),
-                    blur = sfwJson.optDouble("blur", 0.0).toFloat().coerceIn(0f, 0.1f),
-                    brightness = sfwJson.optDouble("brightness", 1.0).toFloat().coerceIn(0f, 1f),
-                    vignette = sfwJson.optDouble("vignette", 0.0).toFloat().coerceIn(0f, 1f)
-                )
-            }
-            val nsfwJson = rootJson.optJSONObject("nsfwFilters")
-            if (nsfwJson != null) {
-                preferences.updateNsfwFilters(
-                    grayscale = nsfwJson.optDouble("grayscale", 0.0).toFloat().coerceIn(0f, 1f),
-                    blur = nsfwJson.optDouble("blur", 0.0).toFloat().coerceIn(0f, 0.1f),
-                    brightness = nsfwJson.optDouble("brightness", 1.0).toFloat().coerceIn(0f, 1f),
-                    vignette = nsfwJson.optDouble("vignette", 0.0).toFloat().coerceIn(0f, 1f)
-                )
-            }
         } catch (e: Exception) {
             Log.e("WallpaperRepo", "Error applying index metadata", e)
         }
@@ -1224,8 +1209,8 @@ class WallpaperRepository(
      * Rewrites index.json from current DB + preferences (used after
      * settings-only changes such as filter/interval edits, which don't
      * otherwise trigger an index write). No-op if no folder is selected.
-     * Skips the write if folderMutex is busy — the ongoing sync already
-     * rewrites with the latest prefs.
+     * Retries once if the folder mutex is busy, so filter changes are not
+     * silently dropped.
      */
     suspend fun refreshFolderIndex() = withContext(Dispatchers.IO) {
         val folderUriString = try {
@@ -1242,6 +1227,17 @@ class WallpaperRepository(
                     updateFolderMetadataIndex(rootDoc)
                 } finally {
                     folderMutex.unlock()
+                }
+            } else {
+                // Mutex is busy (e.g. folder sync in progress). Retry once
+                // after a brief delay so filter changes are never silently dropped.
+                delay(500L)
+                if (folderMutex.tryLock()) {
+                    try {
+                        updateFolderMetadataIndex(rootDoc)
+                    } finally {
+                        folderMutex.unlock()
+                    }
                 }
             }
         } catch (e: Exception) {
