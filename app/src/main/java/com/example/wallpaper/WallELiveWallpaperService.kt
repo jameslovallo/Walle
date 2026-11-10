@@ -302,19 +302,26 @@ class WallELiveWallpaperService : WallpaperService() {
 
         private fun handleDoubleTap(x: Float, y: Float) {
             serviceScope.launch {
-                // Skip to the next wallpaper from saved favorites
-                repository.applyNextScheduledFavoriteWallpaper()
+                // Toggle the synchronized play/pause state. This keeps the
+                // homescreen double tap, the settings "Automatic Schedule"
+                // switch, and the now-playing play/pause button in sync.
+                val currentlyPaused = preferences.isSlideshowPausedFlow.first()
+                val nextPaused = !currentlyPaused
+                preferences.setSlideshowPaused(nextPaused)
 
-                // Reset the schedule timer
-                val isPaused = preferences.isSlideshowPausedFlow.first()
-                if (!isPaused) {
+                if (!nextPaused) {
+                    // Resuming: skip to next favorite wallpaper and reset timer
+                    repository.applyNextScheduledFavoriteWallpaper()
                     val interval = preferences.intervalMinutesFlow.first().coerceAtLeast(1)
                     WallpaperIntervalWorker.scheduleNext(this@WallELiveWallpaperService, interval)
+                } else {
+                    // Pausing: cancel scheduled advance
+                    WallpaperIntervalWorker.cancel(this@WallELiveWallpaperService)
                 }
 
-                // Show skip icon where user tapped
+                // Show skip/pause/resume icon where user tapped
                 withContext(Dispatchers.Main) {
-                    feedbackIconType = WallpaperRenderHelper.FeedbackIconType.SKIP
+                    feedbackIconType = if (nextPaused) WallpaperRenderHelper.FeedbackIconType.PAUSE else WallpaperRenderHelper.FeedbackIconType.RESUME
                     feedbackAnimX = x
                     feedbackAnimY = y
                     feedbackAnimStartTime = SystemClock.uptimeMillis()

@@ -211,12 +211,14 @@ class AppPreferences(private val context: Context) {
     suspend fun setScheduleEnabled(enabled: Boolean) {
         context.dataStore.edit {
             it[KEY_IS_SCHEDULE_ENABLED] = enabled
+            it[KEY_IS_SLIDESHOW_PAUSED] = !enabled
         }
     }
 
     suspend fun setSlideshowPaused(paused: Boolean) {
         context.dataStore.edit {
             it[KEY_IS_SLIDESHOW_PAUSED] = paused
+            it[KEY_IS_SCHEDULE_ENABLED] = !paused
         }
     }
 
